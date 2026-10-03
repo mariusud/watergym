@@ -43,3 +43,43 @@ def test_termination_is_done_but_not_a_time_out() -> None:
     assert extras["time_outs"].tolist() == [0.0, 0.0]
     assert vec.episode_length_buf.tolist() == [0, 1]
     assert vec.env.eta[0, 3] == 0.0
+
+
+def test_task_gives_policy_and_privileged_critic_groups() -> None:
+    from watergym.tasks import RideControlMoth
+
+    vec = RslRlVecEnv(RideControlMoth(2), seed=0)
+    assert vec.num_actions == 1
+    assert vec.max_episode_length == 1000
+    obs = vec.get_observations()
+    assert obs["policy"].shape == (2, RideControlMoth.observation_size)
+    assert obs["critic"].shape == (2, RideControlMoth.privileged_observation_size)
+    obs, _, dones, extras = vec.step(torch.zeros(2, 1))
+    assert torch.isfinite(obs["critic"]).all()
+    assert dones.tolist() == [0, 0]
+    assert "crash_rate" in extras["log"]
+
+
+def test_task_crash_is_done_but_not_a_time_out() -> None:
+    from watergym.tasks import RideControlMoth
+
+    vec = RslRlVecEnv(RideControlMoth(2), seed=0)
+    vec.env.env.eta[0, 4] = 0.5  # env 0 pitches past the task's 15 degrees
+    _, _, dones, extras = vec.step(torch.zeros(2, 1))
+    assert dones.tolist() == [1, 0]
+    assert extras["time_outs"].tolist() == [0.0, 0.0]
+
+
+def test_load_policy_matches_the_runner_actor(tmp_path) -> None:
+    from rsl_rl.runners import OnPolicyRunner
+
+    from watergym.rl.rsl_rl import TRAIN_CFG, load_policy
+    from watergym.tasks import RideControlMoth
+
+    vec = RslRlVecEnv(RideControlMoth(3), seed=0)
+    runner = OnPolicyRunner(vec, TRAIN_CFG, device="cpu")
+    runner.save(str(tmp_path / "model.pt"))
+    obs = vec.get_observations()
+    expected = runner.get_inference_policy()(obs)
+    policy = load_policy(tmp_path / "model.pt", RideControlMoth.observation_size, 1)
+    assert torch.allclose(policy(obs["policy"]), expected)

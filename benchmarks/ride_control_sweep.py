@@ -3,7 +3,8 @@
     OMP_NUM_THREADS=2 uv run --with matplotlib python benchmarks/ride_control_sweep.py --quick
 
 A policy is any callable from observations [envs, 6] to a flap command [envs, 1]: the
-built-in "wand" and "zero", or "package.module:attribute" for your own.
+built-in "wand" and "zero", "package.module:attribute" for your own, or a path ending in .pt
+for an rsl_rl checkpoint from examples/train_rsl_rl.py (needs `--extra rl`).
 """
 
 import argparse
@@ -42,6 +43,11 @@ BASELINES = {"wand": wand_policy, "zero": zero_policy}
 def load_policy(name: str) -> Policy:
     if name in BASELINES:
         return BASELINES[name]
+    if name.endswith(".pt"):
+        from watergym.rl.rsl_rl import load_policy as load_checkpoint
+        from watergym.tasks.ride_control import RideControlMoth
+
+        return load_checkpoint(name, RideControlMoth.observation_size, RideControlMoth.action_size)
     module, attribute = name.split(":")
     return getattr(importlib.import_module(module), attribute)
 

@@ -201,7 +201,7 @@ class RideControlMoth:
         self._signals = {
             "height_error_m": height_error,
             "flap_deg": torch.rad2deg(flap * FLAP_RANGE),
-            "heave_accel_m_s2": self.heave_accel,
+            "heave_accel_m_s2": self.heave_accel.clone(),  # _restart zeroes it in place
             "touchdown": touchdown,
             "ventilation_crash": ventilation_crash,
             "too_tilted": too_tilted,

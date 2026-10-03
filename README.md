@@ -133,9 +133,9 @@ uv run --extra rl examples/train_rsl_rl.py --num-envs 1024 --iterations 300
 uv run --extra rl --extra viz examples/train_rsl_rl.py --play logs/rsl_rl/moth/<timestamp>/model_299.pt
 ```
 
-The example trains the Moth to hold its starting ride height and writes checkpoints and TensorBoard logs to `logs/rsl_rl/moth/<timestamp>/`. `model_299.pt` exists only after the 300 iterations finish; the script also saves a checkpoint every 50 iterations, so `model_50.pt` appears earlier. Add `--device mps` or `--device cuda` to run more envs.
+The example trains the Moth to hold its starting ride height and writes checkpoints and TensorBoard logs to `logs/rsl_rl/moth/<timestamp>/`. To train on the benchmark task instead, add `--task RideControl-Moth-v0` (and `--hs`, `--tp` for the sea): the policy sees the task's six sensor observations, the critic its privileged ones, and runs go to `logs/rsl_rl/RideControl-Moth-v0/<timestamp>/`. Score a task checkpoint against the wand with `benchmarks/ride_control_sweep.py --policy wand <checkpoint>.pt`, and pass the same `--task` to `--play`. `model_299.pt` exists only after the 300 iterations finish; the script also saves a checkpoint every 50 iterations, so `model_50.pt` appears earlier. Add `--device mps` or `--device cuda` to run more envs.
 
-To check a checkpoint without a window, add `--viewer null`: it runs `--seconds 20` (the default) of sim time and prints the mean episode reward, the ride-height RMS in metres and the number of crashes. `RslRlVecEnv(env)` wraps any `WaterEnv`; [docs/training.md](docs/training.md) shows how `terminated` and `truncated` map to rsl_rl's `dones` and `time_outs`.
+To check a checkpoint without a window, add `--viewer null`: it runs `--seconds 20` (the default) of sim time and prints the mean episode reward, the ride-height RMS in metres and the number of crashes. `RslRlVecEnv(env)` wraps any `WaterEnv` or task; [docs/training.md](docs/training.md) shows how `terminated` and `truncated` map to rsl_rl's `dones` and `time_outs`.
 
 ## Examples and the viewer
 
