@@ -1,7 +1,6 @@
 """BlueROV2 Heavy, a small open-frame ROV. Mass, volume, added mass and damping from
-von Benzon et al. 2022 (JMSE 10:1898, Table A1) via research/11-vessel-parameters.md
-section 3. The eight-thruster layout is simplified to four vectored horizontal thrusters
-and four vertical ones."""
+von Benzon et al. 2022 (JMSE 10:1898, Table A1). The eight-thruster layout is
+simplified to four vectored horizontal thrusters and four vertical ones."""
 
 import math
 

@@ -7,8 +7,8 @@ body motion and wave orbital velocity included, and produces
 
 with C_L reduced near the free surface and collapsed when the foil is ventilated.
 
-The ventilation thresholds below are placeholders. research/12 section 5 sources the regime
-maps (Harwood et al.) but no numbers, so every threshold is a Foil field meant to be
+The ventilation thresholds below are placeholders. Harwood et al. map the regimes but give
+no numbers, so every threshold is a Foil field meant to be
 domain-randomized.
 """
 

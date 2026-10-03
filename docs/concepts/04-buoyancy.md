@@ -26,7 +26,7 @@ WaterGym instead asks, at every step, for each hull point: where is the water su
 
 ## What it leaves out
 
-- **Diffraction and radiation.** The hull disturbs the waves and makes its own waves. The plan covers these with precomputed coefficients and a state-space filter, not with sampling (`research/00-plan.md`, section 2).
+- **Diffraction and radiation.** The hull disturbs the waves and makes its own waves. These need precomputed coefficients and a state-space filter, not sampling, and are not modelled yet.
 - **Accuracy depends on point count.** Too few points makes the force jumpy as a point crosses the surface. Use enough points that the ramp smooths it.
 
 Implemented in `src/watergym/hydrostatics.py`. Next: [foils](05-foils.md).

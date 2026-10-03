@@ -4,7 +4,7 @@
 
     a = F / (m + m_a) = 50 / (100 + 20) = 0.417 m/s^2
 
-Moving sideways, the hull pushes more water, so say m_a = 80 kg: `50 / 180 = 0.278 m/s^2`. Same body, different acceleration per direction. Ignoring this makes heave and sway wrong by 50 to 100 percent or more (`research/00-plan.md`, section 2).
+Moving sideways, the hull pushes more water, so say m_a = 80 kg: `50 / 180 = 0.278 m/s^2`. Same body, different acceleration per direction. Ignoring this makes heave and sway wrong by 50 to 100 percent or more.
 
 ## The Fossen equation
 

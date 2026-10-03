@@ -1,6 +1,6 @@
 """Maritime Robotics Otter USV, a 2 m twin-pontoon catamaran with two thrusters.
-Coefficients from Fossen's PythonVehicleSimulator otter.py via
-research/11-vessel-parameters.md section 2. Pontoons are boxes, so the draft differs from
+Coefficients from Fossen's PythonVehicleSimulator otter.py.
+Pontoons are boxes, so the draft differs from
 Fossen's hull-form coefficients; reverse thrust is treated as symmetric."""
 
 from watergym.geometry import box_mesh, box_samples

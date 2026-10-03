@@ -19,7 +19,7 @@ A real sea has no single wave. It is a sum of many, each with its own amplitude,
 
     eta(x, y, t) = sum_i a_i * cos(k_i*(x*cos(d_i) + y*sin(d_i)) - w_i*t + phase_i)
 
-Each component obeys the **deep-water dispersion relation** `w^2 = g*k`. Long waves (small ω) travel faster. WaterGym draws N components (the plan suggests 100 to 200) once per environment reset, then evaluates the sum at any (x, y, t) with plain trig. No fluid solver runs.
+Each component obeys the **deep-water dispersion relation** `w^2 = g*k`. Long waves (small ω) travel faster. WaterGym draws N components (100 to 200 is typical) once per environment reset, then evaluates the sum at any (x, y, t) with plain trig. No fluid solver runs.
 
 ## Where the amplitudes come from
 

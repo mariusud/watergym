@@ -75,7 +75,13 @@ class WaterViewer:
         patch_size_m: float = 16.0,
         patch_resolution: int = 48,
         spacing_m: float | None = None,
+        edge_fade: float = 0.0,
+        sea_color: tuple[float, float, float] = SEA_COLOR,
+        sea_opacity: float = 0.75,
+        sea_roughness: float = 0.25,
     ) -> None:
+        """`edge_fade` is the fraction of the patch width over which waves taper to flat at
+        each border, so patches placed edge to edge (spacing = patch size) join without steps."""
         self.viewer = viewer
         self.num_envs = num_envs
         self.spacing_m = spacing_m or patch_size_m * 1.1
@@ -95,6 +101,10 @@ class WaterViewer:
         self.patch = torch.stack((grid_x, grid_y, torch.zeros_like(grid_x)), dim=-1).reshape(-1, 3)
         self.sea_indices = self._tiled_triangles(patch_resolution, num_envs)
         self.registered: set[str] = set()
+        self.sea_color = sea_color
+        self.sea_opacity = sea_opacity
+        self.sea_roughness = sea_roughness
+        self.edge_weight = self._edge_weight(side, edge_fade)
 
     def look_at_grid(
         self, distance: float = 1.0, pitch_deg: float = -25.0, yaw_deg: float = 0.0
@@ -144,16 +154,16 @@ class WaterViewer:
         points = followed[:, None, :] + self.patch[None]
         surface = elevation(sea, points.to(device), t).cpu()
         local = self.patch[None].expand(self.num_envs, -1, -1).clone()
-        local[..., 2] = -surface
+        local[..., 2] = -surface * self.edge_weight
         vertices = to_viewer_frame(local) + self.offsets[:, None]
         self.viewer.log_mesh(
             "sea",
             vec3_array(vertices),
             self.sea_indices,
             normals=vec3_array(self._grid_normals(vertices)),
-            color=SEA_COLOR,
-            roughness=0.25,
-            opacity=0.75,
+            color=self.sea_color,
+            roughness=self.sea_roughness,
+            opacity=self.sea_opacity,
             dynamic=True,
             backface_culling=False,
         )
@@ -205,6 +215,16 @@ class WaterViewer:
             vec3_array(torch.cat(ends, 1)),
             FORCE_COLOR,
         )
+
+    @staticmethod
+    def _edge_weight(side: Tensor, edge_fade: float) -> Tensor:
+        """Smoothstep from 0 at the patch border to 1 `edge_fade` of the width inside, [P]."""
+        if edge_fade <= 0:
+            return torch.ones(side.numel() ** 2)
+        width = (side[-1] - side[0]).item()
+        inside = ((side - side[0]).minimum(side[-1] - side) / (edge_fade * width)).clamp(0, 1)
+        ramp = inside * inside * (3 - 2 * inside)
+        return (ramp[:, None] * ramp[None, :]).reshape(-1)
 
     @staticmethod
     def _tiled_triangles(resolution: int, copies: int) -> wp.array:

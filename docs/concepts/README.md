@@ -11,4 +11,3 @@ Suggested reading order:
 5. [Foils](05-foils.md): strip theory, relative flow, free-surface decay, ventilation, the Moth wand.
 6. [Batching](06-batching.md): why every quantity is a `[num_envs, ...]` tensor.
 
-Background: `research/00-plan.md` section 2 (physics primer) and its glossary.

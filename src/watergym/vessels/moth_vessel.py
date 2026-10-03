@@ -1,6 +1,6 @@
 """International Moth foiling dinghy, flying in the vertical plane (surge, heave, pitch).
-The sailor's roll balance is not modelled. Numbers from research/11-vessel-parameters.md
-section 1; wand geometry, gearing, sailor mass and inertia there are estimates.
+The sailor's roll balance is not modelled. Wand geometry, gearing, sailor mass and inertia
+are estimates.
 
 Body origin is the CG of boat plus sailor, placed 0.25 m above the hull bottom.
 """

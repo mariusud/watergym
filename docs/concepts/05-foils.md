@@ -28,11 +28,11 @@ Near the surface, lift drops. At high Froude number, the free surface acts like 
     lift ratio = (1 + 16 (h/c)^2) / (2 + 16 (h/c)^2)
     h/c = 0 -> 0.50,  0.25 -> 0.67,  0.5 -> 0.83,  1 -> 0.94,  2 -> 0.99
 
-At the surface lift halves, and one chord down the loss is only about 6 %. This is the high-Froude limit, recalled from Faltinsen's *Hydrodynamics of High-Speed Marine Vehicles* (2005) and checked against a two-vortex derivation in `research/12`. At lower Froude numbers, wave-making changes the result. `foils.py` applies this formula to horizontal foils only. A vertical strut that pierces the surface gets no image-vortex factor: it lifts with its immersed span, and strips above the water carry nothing. A strip fades from dry to wet over its own height plus `WETTING_RAMP_CHORDS` (0.1) chords, so a horizontal foil does not switch its lift on in a single step.
+At the surface lift halves, and one chord down the loss is only about 6 %. This is the high-Froude limit, recalled from Faltinsen's *Hydrodynamics of High-Speed Marine Vehicles* (2005). At lower Froude numbers, wave-making changes the result. `foils.py` applies this formula to horizontal foils only. A vertical strut that pierces the surface gets no image-vortex factor: it lifts with its immersed span, and strips above the water carry nothing. A strip fades from dry to wet over its own height plus `WETTING_RAMP_CHORDS` (0.1) chords, so a horizontal foil does not switch its lift on in a single step.
 
 ## Ventilation as a regime switch
 
-Ventilation is air drawn down to the suction side of a foil or strut. Lift collapses at once, and the foil does not recover when the angle of attack falls back. It has hysteresis: the same (speed, depth, angle) can be ventilated or not, depending on history. The recorded onset for tail ventilation is depth Froude number `Fr_h > AR^(-1/2)` (`research/06`, section 5, citing [arXiv:2503.18015](https://arxiv.org/abs/2503.18015)).
+Ventilation is air drawn down to the suction side of a foil or strut. Lift collapses at once, and the foil does not recover when the angle of attack falls back. It has hysteresis: the same (speed, depth, angle) can be ventilated or not, depending on history. The recorded onset for tail ventilation is depth Froude number `Fr_h > AR^(-1/2)` ([arXiv:2503.18015](https://arxiv.org/abs/2503.18015)).
 
 A sample Froude number: `Fr_h = U / sqrt(g*h)`. At 6 m/s and 0.3 m depth: 3.5. At 1.0 m depth: 1.9.
 
@@ -41,12 +41,12 @@ So each foil carries a small state machine, attached or ventilated, with entry a
 - **Onset.** Any wet strip within one chord of the surface has `Fr_h > AR^(-1/2)` and `|alpha|` above 10 degrees. Air comes down from the surface, so the shallowest strips decide. A strut can ventilate from its top strips even when most of it is deep.
 - **Washout.** Every wet strip is below 4 degrees, the foil is deeper than one chord (horizontal foils only, since a surface-piercing strut always has an air path), and both have held for `washout_time_s` (0.5 s).
 
-While ventilated, lift is multiplied by 0.25 and profile drag by 1.5. All of these numbers are placeholders: `research/12` section 5 found the regime maps but no thresholds, so each one is a `Foil` field meant to be domain-randomized. Onset is deterministic for now; the plan's probability ramp with `alpha_crit(Fr_h)` comes later.
+While ventilated, lift is multiplied by 0.25 and profile drag by 1.5. All of these numbers are placeholders: Harwood et al. map the regimes but give no thresholds, so each one is a `Foil` field meant to be domain-randomized. Onset is deterministic for now; a probability ramp with `alpha_crit(Fr_h)` comes later.
 
 A policy that only sees smooth dynamics will walk into this edge, which is why it makes a good benchmark.
 
 ## The Moth wand
 
-A Moth sailing dinghy holds ride height with a wand, a rod that trails on the water ahead of the bow. A low hull pushes the rod back, which through a linkage raises the flap angle, which raises lift. A high hull does the reverse. It is a mechanical proportional controller (`research/06`, section 1). In chop, the wand skips, so it follows small waves it should ignore. In WaterGym the wand is the baseline controller: sample the surface at the wand tip, convert the angle to flap deflection, and compare a learned policy against it.
+A Moth sailing dinghy holds ride height with a wand, a rod that trails on the water ahead of the bow. A low hull pushes the rod back, which through a linkage raises the flap angle, which raises lift. A high hull does the reverse. It is a mechanical proportional controller. In chop, the wand skips, so it follows small waves it should ignore. In WaterGym the wand is the baseline controller: sample the surface at the wand tip, convert the angle to flap deflection, and compare a learned policy against it.
 
 Implemented in `src/watergym/foils.py`. Next: [batching](06-batching.md).

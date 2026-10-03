@@ -1,5 +1,5 @@
 """A 10 x 4 x 2 m box barge of uniform density floating at 1 m draft: the hydrostatics
-reference. Numbers from research/11-vessel-parameters.md section 4."""
+reference."""
 
 from watergym.geometry import box_mesh, box_samples
 from watergym.hydrostatics import WATER_DENSITY
