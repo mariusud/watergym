@@ -11,7 +11,7 @@ import math
 
 from watergym import SeaState, WaterEnv
 from watergym.vessels import moth
-from watergym.vessels.moth import HULL_BOTTOM_Z, wand_action
+from watergym.vessels.moth_vessel import HULL_BOTTOM_Z, wand_action
 from watergym.viewer import WaterViewer, make_viewer
 
 parser = argparse.ArgumentParser()
@@ -24,7 +24,7 @@ parser.add_argument("--hs", type=float, default=0.3, help="significant wave heig
 parser.add_argument("--device", default="cpu")
 args = parser.parse_args()
 
-head_seas = SeaState(hs=args.hs, tp=3.0, heading=math.pi, spreading=10.0, num_components=48)
+head_seas = SeaState(hs=args.hs, tp=3.0, heading_rad=math.pi, spreading=10.0, num_components=48)
 env = WaterEnv(moth(), args.num_envs, head_seas, device=args.device)
 env.reset(seed=0)
 

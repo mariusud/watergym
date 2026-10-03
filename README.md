@@ -1,18 +1,20 @@
 # WaterGym
 
-WaterGym simulates batches of vessels in irregular waves: hydrofoils, boats, USVs and underwater vehicles. The physics is plain PyTorch on tensors shaped `[num_envs, ...]`, so it runs on CPU, Apple MPS or CUDA with no simulator install. Newton's viewer draws the scene when you want to look at it.
+A batched PyTorch gym for vessels in waves: hydrofoils, boats, USVs and underwater vehicles, on CPU, Apple MPS or CUDA.
 
-This is the backbone of `watergym-lite` from the design plan (research/00-plan.md, WP11). There is no training code yet.
+![A fleet of Moths foiling through head seas](docs/images/03_moth_on_foils.png)
 
 ## Quickstart
 
 ```bash
+git clone https://github.com/YOUR-ORG/watergym && cd watergym  # placeholder URL
 uv sync --extra viz
 uv run --extra viz examples/03_moth_on_foils.py
-uv run pytest -q
 ```
 
-Every example takes `--headless --screenshot out.png` to render offscreen, `--viewer null` to run without drawing, and `--device mps` or `--device cuda` where it has a `--device` flag.
+No window? Add `--headless --screenshot out.png`. No GPU or viewer? `uv sync` alone installs the physics, and `--viewer null` runs without drawing.
+
+[Try it in Colab](https://colab.research.google.com/github/YOUR-ORG/watergym/blob/main/notebooks/quickstart.ipynb) (placeholder link). The notebook is [notebooks/quickstart.ipynb](notebooks/quickstart.ipynb).
 
 ## Examples
 
@@ -21,9 +23,7 @@ Every example takes `--headless --screenshot out.png` to render offscreen, `--vi
 | ![sea](docs/images/01_sea_state.png) `01_sea_state.py`: four JONSWAP seas with Hs 1.5 m and Tp 4.5 s, each with its own random phases | ![barge](docs/images/02_floating_box.png) `02_floating_box.py`: 10 m box barges heaving and rolling in beam seas |
 | ![moth](docs/images/03_moth_on_foils.png) `03_moth_on_foils.py`: International Moths foiling through head seas, flap set by the mechanical wand, lift and drag arrows per foil strip | ![rov](docs/images/04_underwater_vehicle.png) `04_underwater_vehicle.py`: BlueROV2s holding 0.5, 1, 2 and 4 m depth under waves |
 
-## Tutorials
-
-Five short hands-on pages in [docs/tutorials](docs/tutorials/README.md), from drawing a first sea to defining your own vessel. Physics background is in [docs/concepts](docs/concepts/README.md).
+Every example takes `--headless --screenshot out.png` to render offscreen, `--viewer null` to run without drawing, and `--device mps` or `--device cuda` where it has a `--device` flag.
 
 ## Using it
 
@@ -43,6 +43,22 @@ for _ in range(500):
 
 A vessel is a dataclass: a `RigidBody` (mass, inertia, added mass, damping), hull volume samples for buoyancy, a mesh for drawing, and optional `Foil`s and `Thruster`s. The four in `watergym/vessels/` are written out in full, so copy one to start a new vessel.
 
+## Tutorials
+
+Five short hands-on pages in [docs/tutorials](docs/tutorials/README.md), from drawing a first sea to defining your own vessel.
+
+## Concepts
+
+Frames, waves, rigid-body equations, buoyancy, foils and batching, in [docs/concepts](docs/concepts/README.md).
+
+## Training
+
+Train a policy with rsl_rl: see [docs/training.md](docs/training.md). Install the extra with `uv sync --extra rl`.
+
+## Benchmark
+
+Tasks, metrics and baselines are in [docs/benchmark.md](docs/benchmark.md).
+
 ## Layout
 
 ```
@@ -56,9 +72,25 @@ src/watergym/
   vessels/          box_barge, moth, otter, bluerov2
   env.py            WaterEnv: batched reset/step in the Gymnasium vector style
   viewer.py         draws seas, vessels and force arrows with Newton's viewer
+  rl/               rsl_rl adapter (extra: rl)
 examples/           numbered scripts, each runs on its own
+notebooks/          Colab quickstart
+docs/               tutorials, concepts, training, benchmark
 tests/              physics checks, one file per module
 research/           the design plan and background research
+```
+
+## How to cite
+
+Not yet published. Placeholder:
+
+```bibtex
+@software{watergym,
+  title = {WaterGym: a batched PyTorch gym for vessels in waves},
+  author = {TODO},
+  year = {2026},
+  url = {https://github.com/YOUR-ORG/watergym}
+}
 ```
 
 ## Physics in one paragraph
@@ -93,3 +125,7 @@ Reference values come from research/11-vessel-parameters.md and research/12-vali
 - The Moth flies in the vertical plane only (surge, heave, pitch): the sailor's roll balance is not modelled, the sail is a constant forward force at the CG, and the wand reads the water height under its pivot.
 - Foils use thin-airfoil lift with a stall clamp and a flap-effectiveness factor, not a measured polar. Ventilation thresholds are placeholders; the hysteresis is real, the numbers are not.
 - The BlueROV2 has four horizontal and four vertical thrusters in a simplified layout.
+
+## Research
+
+The design plan and the background notes behind it are in [research/](research/00-plan.md). They cover simulators, hydrofoil control, sim-to-real methodology and vessel parameters. The repo implements the `watergym-lite` core of that plan (WP11).

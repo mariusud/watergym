@@ -10,7 +10,7 @@ from torch import Tensor
 
 from watergym.geometry import VolumeSamples
 from watergym.rigid_body import Pose
-from watergym.waves import GRAVITY, Sea, elevation, orbital_acceleration
+from watergym.waves import GRAVITY, Sea, Water, water_at
 
 WATER_DENSITY = 1025.0
 
@@ -26,13 +26,16 @@ def hydrostatic_force(
     t: Tensor,
     pose: Pose,
     density: float = WATER_DENSITY,
+    water: Water | None = None,
 ) -> Tensor:
     """Buoyancy plus Froude-Krylov force and moment about the CG in the body frame [envs, 6]."""
     points = pose.to_world(samples.centers)
-    depth = points[..., 2] + elevation(sea, points, t)
+    water = water or water_at(sea, points, t)
+    depth = points[..., 2] + water.elevation
     wet_volume = samples.volumes * submerged_fraction(depth, samples.heights)
-    gravity = torch.tensor([0.0, 0.0, GRAVITY], device=points.device)
-    force_world = density * wet_volume[..., None] * (orbital_acceleration(sea, points, t) - gravity)
+    pressure_gradient = water.acceleration.clone()
+    pressure_gradient[..., 2] -= GRAVITY
+    force_world = density * wet_volume[..., None] * pressure_gradient
     force_body = pose.to_body(force_world)
     moment_body = torch.linalg.cross(samples.centers.expand_as(force_body), force_body)
     return torch.cat((force_body.sum(1), moment_body.sum(1)), dim=-1)

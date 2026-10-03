@@ -3,8 +3,8 @@ import math
 import torch
 
 from watergym.env import SeaState, WaterEnv
-from watergym.vessels import bluerov2, box_barge, moth, otter
-from watergym.vessels.moth import wand_action
+from watergym.vessels import bluerov2, box_barge, moth, moth_vessel, otter
+from watergym.vessels.moth_vessel import wand_action
 
 
 def test_every_vessel_steps_with_gymnasium_shapes() -> None:
@@ -30,9 +30,18 @@ def test_truncated_envs_restart() -> None:
     env = WaterEnv(box_barge(), 2, episode_length_s=0.1, dt=0.05)
     env.reset()
     for _ in range(2):
-        _, _, _, truncated, _ = env.step(torch.zeros(2, 0))
+        _, _, _, truncated, _ = env.step(None)
     assert truncated.all()
     assert (env.t == 0).all()
+
+
+def test_step_none_is_a_zero_action() -> None:
+    envs = [WaterEnv(moth(), 2, SeaState(hs=0.3, tp=3.0)) for _ in range(2)]
+    for env in envs:
+        env.reset(seed=0)
+    envs[0].step(None)
+    envs[1].step(torch.zeros(2, envs[1].vessel.num_actions))
+    assert torch.equal(envs[0].eta, envs[1].eta)
 
 
 def test_wand_keeps_the_moth_flying_in_calm_water() -> None:
@@ -43,3 +52,32 @@ def test_wand_keeps_the_moth_flying_in_calm_water() -> None:
     hull_bottom_height = -(env.eta[0, 2].item() + 0.25)
     assert 0.2 < hull_bottom_height < 0.9
     assert abs(env.eta[0, 4].item()) < math.radians(3)
+
+
+def test_vessel_module_constants_are_reachable_beside_the_factory() -> None:
+    assert moth_vessel.moth is moth
+    assert moth_vessel.WAND_GEARING > 0
+
+
+def test_ventilated_foils_rewet_after_the_washout_time() -> None:
+    env = WaterEnv(moth(), num_envs=1, sea_state=SeaState(hs=0.0, tp=5.0))
+    env.reset(seed=0)
+    for _ in range(100):
+        env.step(None)
+    env.ventilated[:] = True
+    washout_steps = round(env.vessel.foils[0].washout_time_s / env.dt)
+    for _ in range(washout_steps - 1):
+        env.step(None)
+    assert env.ventilated.all()
+    env.step(None)
+    assert not env.ventilated.any()
+
+
+def test_termination_fn_ends_and_resets_the_chosen_envs() -> None:
+    env = WaterEnv(box_barge(), 3, termination_fn=lambda env: torch.tensor([True, False, False]))
+    env.reset(seed=0)
+    env.step(torch.zeros(3, 0))
+    _, _, terminated, _, _ = env.step(torch.zeros(3, 0))
+    assert terminated.tolist() == [True, False, False]
+    assert env.t[0] == 0.0
+    assert env.t[1] > 0.0

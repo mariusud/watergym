@@ -17,14 +17,14 @@ from watergym.rigid_body import Pose, rk4_step
 from watergym.vessel import Vessel, all_foil_loads, vessel_derivative
 from watergym.waves import Sea, make_sea
 
-RewardFn = Callable[["WaterEnv"], Tensor]
+RewardFn = Callable[["WaterEnv"], Tensor]  # also the type of termination_fn: a bool [envs]
 
 
 @dataclass
 class SeaState:
     hs: float = 0.0
     tp: float = 6.0
-    heading: float = 0.0
+    heading_rad: float = 0.0
     spreading: float | None = None
     gamma: float = 3.3
     num_components: int = 64
@@ -32,6 +32,10 @@ class SeaState:
 
 def no_reward(env: "WaterEnv") -> Tensor:
     return torch.zeros(env.num_envs, device=env.device)
+
+
+def never_terminate(env: "WaterEnv") -> Tensor:
+    return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
 
 
 class WaterEnv:
@@ -45,6 +49,7 @@ class WaterEnv:
         episode_length_s: float = 30.0,
         max_tilt: float = math.radians(60),
         reward_fn: RewardFn = no_reward,
+        termination_fn: RewardFn = never_terminate,
         device: str | torch.device = "cpu",
     ) -> None:
         self.vessel = vessel.to(device)
@@ -55,6 +60,7 @@ class WaterEnv:
         self.episode_length_s = episode_length_s
         self.max_tilt = max_tilt
         self.reward_fn = reward_fn
+        self.termination_fn = termination_fn
         self.device = torch.device(device)
         self.generator = torch.Generator().manual_seed(0)
 
@@ -65,6 +71,7 @@ class WaterEnv:
         self.ventilated = torch.zeros(
             num_envs, len(vessel.foils), dtype=torch.bool, device=self.device
         )
+        self.wetting_time = torch.zeros(num_envs, len(vessel.foils), device=self.device)
         self.sea = self._sample_sea(num_envs)
 
     @property
@@ -80,7 +87,14 @@ class WaterEnv:
         self._reset_envs(torch.arange(self.num_envs, device=self.device))
         return self.observe(), {}
 
-    def step(self, action: Tensor) -> tuple[Tensor, Tensor, Tensor, Tensor, dict]:
+    def step(self, action: Tensor | None) -> tuple[Tensor, Tensor, Tensor, Tensor, dict]:
+        """Advance one dt. `action=None` is a zero action, for vessels without actions.
+
+        Envs that terminate or truncate reset inside this call: the returned observation is
+        already the new episode's first, and the last one is in `info["final_obs"]`.
+        """
+        if action is None:
+            action = torch.zeros(self.num_envs, self.vessel.num_actions)
         self.action = action.clamp(-1, 1).to(self.device)
         derivative = vessel_derivative(self.vessel, self.sea, self.action, self.ventilated)
         substep_dt = self.dt / self.substeps
@@ -92,6 +106,7 @@ class WaterEnv:
         reward = self.reward_fn(self)
         tilt = self.eta[:, 3:5].abs().amax(-1)
         terminated = (tilt > self.max_tilt) | ~torch.isfinite(self.eta).all(-1)
+        terminated = terminated | self.termination_fn(self)
         truncated = self.t >= self.episode_length_s
         info = {"final_obs": self.observe()}
         done = (terminated | truncated).nonzero().squeeze(-1)
@@ -109,7 +124,9 @@ class WaterEnv:
     def _update_ventilation(self) -> None:
         loads = self.foil_loads()
         for i, foil in enumerate(self.vessel.foils):
-            self.ventilated[:, i] = update_ventilation(foil, self.ventilated[:, i], loads[i])
+            self.ventilated[:, i] = update_ventilation(
+                foil, self.ventilated[:, i], loads[i], self.wetting_time[:, i], self.dt
+            )
 
     def _sample_sea(self, num: int) -> Sea:
         s = self.sea_state
@@ -117,7 +134,7 @@ class WaterEnv:
             num,
             s.hs,
             s.tp,
-            heading=s.heading,
+            heading_rad=s.heading_rad,
             spreading=s.spreading,
             gamma=s.gamma,
             num_components=s.num_components,
@@ -130,4 +147,5 @@ class WaterEnv:
         self.nu[env_ids] = torch.tensor(self.vessel.initial_nu, device=self.device)
         self.t[env_ids] = 0.0
         self.ventilated[env_ids] = False
+        self.wetting_time[env_ids] = 0.0
         self.sea.replace(env_ids, self._sample_sea(len(env_ids)))

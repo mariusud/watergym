@@ -5,7 +5,8 @@ so the instantaneous surface sits at z = -eta and a point is wet when z + eta > 
 """
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
+from typing import NamedTuple
 
 import torch
 from torch import Tensor
@@ -27,6 +28,10 @@ class Sea:
     def num_envs(self) -> int:
         return self.amplitude.shape[0]
 
+    def subset(self, index: slice | list[int] | Tensor) -> "Sea":
+        """The seas of the selected envs only: a slice, a list of env ids or a tensor of ids."""
+        return Sea(**{f.name: getattr(self, f.name)[index] for f in fields(self)})
+
     def replace(self, env_ids: Tensor, other: "Sea") -> None:
         for name in ("amplitude", "omega", "wavenumber", "direction", "phase"):
             getattr(self, name)[env_ids] = getattr(other, name)
@@ -46,31 +51,31 @@ def jonswap(omega: Tensor, hs: Tensor, tp: Tensor, gamma: float = 3.3) -> Tensor
 def sample_directions(
     num_envs: int,
     num_components: int,
-    heading: Tensor,
+    heading_rad: Tensor,
     spreading: float | None,
     generator: torch.Generator,
 ) -> Tensor:
     """Directions waves travel toward, measured from north (x) toward east (y).
 
-    `spreading` is the s of the cos-2s distribution D(theta) ~ cos^(2s)((theta - heading) / 2);
+    `spreading` is the s of the cos-2s distribution D(theta) ~ cos^(2s)((theta - heading_rad) / 2);
     None gives long-crested waves.
     """
-    heading = heading[:, None].expand(num_envs, num_components)
+    heading_rad = heading_rad[:, None].expand(num_envs, num_components)
     if spreading is None:
-        return heading.clone()
-    offsets = torch.linspace(-math.pi, math.pi, 361, device=heading.device)
+        return heading_rad.clone()
+    offsets = torch.linspace(-math.pi, math.pi, 361, device=heading_rad.device)
     weights = torch.cos(offsets / 2).abs() ** (2 * spreading)
     picks = torch.multinomial(
         weights.cpu(), num_envs * num_components, replacement=True, generator=generator
     )
-    return heading + offsets[picks.to(heading.device)].view(num_envs, num_components)
+    return heading_rad + offsets[picks.to(heading_rad.device)].view(num_envs, num_components)
 
 
 def make_sea(
     num_envs: int,
     hs: float | Tensor,
     tp: float | Tensor,
-    heading: float | Tensor = 0.0,
+    heading_rad: float | Tensor = 0.0,
     spreading: float | None = None,
     gamma: float = 3.3,
     num_components: int = 64,
@@ -88,7 +93,7 @@ def make_sea(
     def per_env(value: float | Tensor) -> Tensor:
         return torch.as_tensor(value, dtype=torch.float32, device=device).expand(num_envs)
 
-    hs, tp, heading = per_env(hs), per_env(tp), per_env(heading)
+    hs, tp, heading_rad = per_env(hs), per_env(tp), per_env(heading_rad)
 
     def uniform(*shape: int) -> Tensor:
         return torch.rand(*shape, generator=generator).to(device)
@@ -103,13 +108,13 @@ def make_sea(
         amplitude=amplitude,
         omega=omega,
         wavenumber=omega**2 / GRAVITY,
-        direction=sample_directions(num_envs, num_components, heading, spreading, generator),
+        direction=sample_directions(num_envs, num_components, heading_rad, spreading, generator),
         phase=2 * math.pi * uniform(num_envs, num_components),
     )
 
 
 def regular_wave(
-    num_envs: int, amplitude: float, period: float, heading: float = 0.0, device: str = "cpu"
+    num_envs: int, amplitude: float, period: float, heading_rad: float = 0.0, device: str = "cpu"
 ) -> Sea:
     """A single sinusoidal wave train, the textbook test case."""
 
@@ -121,7 +126,7 @@ def regular_wave(
         amplitude=full(amplitude),
         omega=full(omega),
         wavenumber=full(omega**2 / GRAVITY),
-        direction=full(heading),
+        direction=full(heading_rad),
         phase=full(0.0),
     )
 
@@ -138,26 +143,45 @@ def phase_angle(sea: Sea, points: Tensor, t: Tensor | float) -> Tensor:
     )
 
 
+class Water(NamedTuple):
+    """The sea at points: elevation [envs, points], velocity and acceleration [envs, points, 3]."""
+
+    elevation: Tensor
+    velocity: Tensor
+    acceleration: Tensor
+
+
+def water_at(sea: Sea, points: Tensor, t: Tensor | float) -> Water:
+    """Elevation (positive up), deep-water Airy velocity and local acceleration d(velocity)/dt.
+
+    The phase and its cos and sin are computed once and shared. Points above the mean level
+    use the mean-level velocity and acceleration (constant extrapolation).
+    """
+    theta = phase_angle(sea, points, t)
+    cos_theta, sin_theta = torch.cos(theta), torch.sin(theta)
+    amplitude = _amplitude_at_depth(sea, points)
+    speed = sea.omega[:, None] * amplitude
+    accel = sea.omega[:, None] ** 2 * amplitude
+    return Water(
+        elevation=(sea.amplitude[:, None] * cos_theta).sum(-1),
+        velocity=_to_ned(sea, horizontal=speed * cos_theta, upward=speed * sin_theta),
+        acceleration=_to_ned(sea, horizontal=accel * sin_theta, upward=-accel * cos_theta),
+    )
+
+
 def elevation(sea: Sea, points: Tensor, t: Tensor | float) -> Tensor:
     """Surface elevation eta (positive up) at the points' (x, y), shaped [envs, points]."""
-    return (sea.amplitude[:, None] * torch.cos(phase_angle(sea, points, t))).sum(-1)
+    return water_at(sea, points, t).elevation
 
 
 def orbital_velocity(sea: Sea, points: Tensor, t: Tensor | float) -> Tensor:
-    """Water velocity in NED at points [envs, points, 3], deep-water Airy theory.
-
-    Points above the mean level use the mean-level velocity (constant extrapolation).
-    """
-    theta = phase_angle(sea, points, t)
-    speed = sea.omega[:, None] * _amplitude_at_depth(sea, points)
-    return _to_ned(sea, horizontal=speed * torch.cos(theta), upward=speed * torch.sin(theta))
+    """Water velocity in NED at points [envs, points, 3], deep-water Airy theory."""
+    return water_at(sea, points, t).velocity
 
 
 def orbital_acceleration(sea: Sea, points: Tensor, t: Tensor | float) -> Tensor:
     """Local water acceleration d(velocity)/dt in NED at points [envs, points, 3]."""
-    theta = phase_angle(sea, points, t)
-    accel = sea.omega[:, None] ** 2 * _amplitude_at_depth(sea, points)
-    return _to_ned(sea, horizontal=accel * torch.sin(theta), upward=-accel * torch.cos(theta))
+    return water_at(sea, points, t).acceleration
 
 
 def _amplitude_at_depth(sea: Sea, points: Tensor) -> Tensor:

@@ -6,10 +6,14 @@ body motion and wave orbital velocity included, and produces
     L = 1/2 rho |U|^2 A C_L(alpha),   D = 1/2 rho |U|^2 A C_D(alpha)
 
 with C_L reduced near the free surface and collapsed when the foil is ventilated.
+
+The ventilation thresholds below are placeholders. research/12 section 5 sources the regime
+maps (Harwood et al.) but no numbers, so every threshold is a Foil field meant to be
+domain-randomized.
 """
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import torch
 from torch import Tensor
@@ -17,7 +21,11 @@ from torch import Tensor
 from watergym.geometry import Vec3
 from watergym.hydrostatics import WATER_DENSITY, submerged_fraction
 from watergym.rigid_body import Pose
-from watergym.waves import GRAVITY, Sea, elevation, orbital_velocity
+from watergym.waves import GRAVITY, Sea, Water, water_at
+
+# A horizontal strip has no height, so without this ramp its lift would switch on in one
+# step as it crosses the surface. Lift fades in over this many chords of depth instead.
+WETTING_RAMP_CHORDS = 0.1
 
 
 def helmbold_lift_slope(aspect_ratio: float) -> float:
@@ -51,22 +59,50 @@ class Foil:
     oswald_efficiency: float = 0.9
     flap_effectiveness: float = 0.0
     max_flap: float = 0.0
+    # Ventilation, all placeholders to randomize: lift and profile drag multipliers while
+    # ventilated, then the onset and washout thresholds of update_ventilation.
     ventilated_lift_ratio: float = 0.25
+    ventilated_drag_ratio: float = 1.5
+    onset_froude_scale: float = 1.0
+    onset_depth_chords: float = 1.0
     ventilation_onset_angle: float = math.radians(10)
+    washout_depth_chords: float = 1.0
     ventilation_washout_angle: float = math.radians(4)
+    washout_time_s: float = 0.5
     num_strips: int = 8
     strip_centers: Tensor = field(init=False)
+    span_vector: Tensor = field(init=False)
+    chord_vector: Tensor = field(init=False)
 
     def __post_init__(self) -> None:
         offsets = (torch.arange(self.num_strips) + 0.5) / self.num_strips - 0.5
-        span_axis = torch.tensor(self.span_axis)
+        self.span_vector = torch.tensor(self.span_axis)
+        self.chord_vector = torch.tensor(self.chord_axis)
         self.strip_centers = (
-            torch.tensor(self.position) + offsets[:, None] * self.span_m * span_axis
+            torch.tensor(self.position) + offsets[:, None] * self.span_m * self.span_vector
         )
+
+    def to(self, device: str | torch.device) -> "Foil":
+        moved = replace(self)
+        moved.strip_centers = self.strip_centers.to(device)
+        moved.span_vector = self.span_vector.to(device)
+        moved.chord_vector = self.chord_vector.to(device)
+        return moved
 
     @property
     def aspect_ratio(self) -> float:
         return self.span_m / self.chord_m
+
+    @property
+    def is_horizontal(self) -> bool:
+        """Span within 45 degrees of horizontal: a foil, not a strut."""
+        return abs(self.span_axis[2]) < math.sqrt(0.5)
+
+    @property
+    def onset_depth_froude(self) -> float:
+        """Fr_h above which a near-surface strip can ventilate: AR^-1/2 (plan section 3.5,
+        from arXiv:2503.18015), times a scale to randomize."""
+        return self.onset_froude_scale * self.aspect_ratio**-0.5
 
     @property
     def has_flap(self) -> bool:
@@ -79,7 +115,10 @@ class Foil:
     @property
     def immersion_band(self) -> float:
         """Vertical distance over which a strip goes from dry to fully wet."""
-        return abs(self.span_axis[2]) * self.span_m / self.num_strips + 0.1 * self.chord_m
+        return (
+            abs(self.span_axis[2]) * self.span_m / self.num_strips
+            + WETTING_RAMP_CHORDS * self.chord_m
+        )
 
 
 @dataclass
@@ -103,30 +142,32 @@ def foil_loads(
     flap: Tensor,
     ventilated: Tensor,
     density: float = WATER_DENSITY,
+    water: Water | None = None,
 ) -> FoilLoads:
     """Strip forces for a batch of vessels. `flap` [envs] in rad, `ventilated` [envs] bool."""
-    device = nu.device
-    r = foil.strip_centers.to(device)
-    span = torch.tensor(foil.span_axis, device=device)
-    chord = torch.tensor(foil.chord_axis, device=device)
+    r, span, chord = foil.strip_centers, foil.span_vector, foil.chord_vector
     normal = torch.linalg.cross(span, chord)
 
     points = pose.to_world(r)
+    water = water or water_at(sea, points, t)
     strip_velocity = nu[:, None, :3] + torch.linalg.cross(nu[:, None, 3:], r[None])
-    flow = pose.to_body(orbital_velocity(sea, points, t)) - strip_velocity
+    flow = pose.to_body(water.velocity) - strip_velocity
     flow = flow - (flow @ span)[..., None] * span
     speed = flow.norm(dim=-1).clamp(min=1e-6)
 
     alpha = torch.atan2(flow @ normal, -(flow @ chord))
     alpha = alpha + foil.incidence + foil.flap_effectiveness * flap[:, None]
-    depth = points[..., 2] + elevation(sea, points, t)
+    depth = points[..., 2] + water.elevation
 
     lift_coefficient = foil.lift_slope * alpha.clamp(-foil.stall_angle, foil.stall_angle)
-    lift_coefficient = lift_coefficient * free_surface_factor(depth / foil.chord_m)
-    lift_coefficient = torch.where(
-        ventilated[:, None], foil.ventilated_lift_ratio * lift_coefficient, lift_coefficient
-    )
-    drag_coefficient = foil.zero_lift_drag + lift_coefficient**2 / (
+    # Image-vortex loss for horizontal foils only. A vertical strut loses lift near the
+    # surface only through its dry strips, which carry nothing (wet_area below).
+    if foil.is_horizontal:
+        lift_coefficient = lift_coefficient * free_surface_factor(depth / foil.chord_m)
+    vented = ventilated[:, None]
+    lift_coefficient = lift_coefficient * torch.where(vented, foil.ventilated_lift_ratio, 1.0)
+    profile_drag = foil.zero_lift_drag * torch.where(vented, foil.ventilated_drag_ratio, 1.0)
+    drag_coefficient = profile_drag + lift_coefficient**2 / (
         math.pi * foil.oswald_efficiency * foil.aspect_ratio
     )
 
@@ -142,26 +183,49 @@ def foil_loads(
 
 def foil_wrench(foil: Foil, loads: FoilLoads) -> Tensor:
     """Total force and moment about the CG in the body frame [envs, 6]."""
-    r = foil.strip_centers.to(loads.force.device).expand_as(loads.force)
+    r = foil.strip_centers.expand_as(loads.force)
     moment = torch.linalg.cross(r, loads.force)
     return torch.cat((loads.force.sum(1), moment.sum(1)), dim=-1)
 
 
-def update_ventilation(foil: Foil, ventilated: Tensor, loads: FoilLoads) -> Tensor:
-    """Two-state ventilation with hysteresis in angle of attack.
+def update_ventilation(
+    foil: Foil,
+    ventilated: Tensor,
+    loads: FoilLoads,
+    wetting_time: Tensor | None = None,
+    dt: float = 0.0,
+) -> Tensor:
+    """Two-state ventilation automaton (plan section 3.5), decided strip by strip.
 
-    Air reaches the suction side when the foil is near the surface, fast (depth Froude
-    number U / sqrt(g h) above AR^-1/2, plan section 3.5) and loaded past the onset angle.
-    The flow re-attaches only once the angle drops below the lower washout angle.
+    Onset: any wet strip within `onset_depth_chords` of the surface runs at a depth Froude
+    number U / sqrt(g h) above `onset_depth_froude` and an angle above the onset angle. Air
+    is drawn down from the surface, so the shallowest strips decide, not the foil's mean.
+
+    Washout: every wet strip is below the washout angle and, for a horizontal foil, the
+    shallowest strip is deeper than `washout_depth_chords`, which cuts off the air. A
+    surface-piercing strut always has an air path, so only its angle can wash it out. These
+    conditions must hold for `washout_time_s`, counted in `wetting_time` [envs], which is
+    advanced in place. Without a `wetting_time` the foil re-wets as soon as they hold.
     """
-    alpha = loads.alpha.abs().mean(-1)
-    depth = loads.depth.mean(-1).clamp(min=1e-3)
-    depth_froude = loads.speed.mean(-1) / torch.sqrt(GRAVITY * depth)
-    near_surface = depth < foil.chord_m
+    wet = loads.depth > -foil.immersion_band / 2
+    alpha = loads.alpha.abs()
+    depth_froude = loads.speed / torch.sqrt(GRAVITY * loads.depth.clamp(min=1e-3))
+    near_surface = loads.depth < foil.onset_depth_chords * foil.chord_m
     onset = (
-        near_surface
-        & (depth_froude > foil.aspect_ratio**-0.5)
+        wet
+        & near_surface
+        & (depth_froude > foil.onset_depth_froude)
         & (alpha > foil.ventilation_onset_angle)
-    )
-    washout = alpha < foil.ventilation_washout_angle
-    return (ventilated | onset) & ~washout
+    ).any(-1)
+
+    calm = ((alpha < foil.ventilation_washout_angle) | ~wet).all(-1)
+    if foil.is_horizontal:
+        shallowest = loads.depth.amin(-1)
+        calm = calm & (shallowest > foil.washout_depth_chords * foil.chord_m)
+
+    if wetting_time is None:
+        rewetted = calm
+    else:
+        wetting_time.copy_(torch.where(ventilated & calm, wetting_time + dt, 0.0))
+        rewetted = wetting_time >= foil.washout_time_s
+    return torch.where(ventilated, ~rewetted, onset)

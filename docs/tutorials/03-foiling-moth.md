@@ -11,9 +11,9 @@ import torch
 
 from watergym import SeaState, WaterEnv
 from watergym.vessels import moth
-from watergym.vessels.moth import HULL_BOTTOM_Z, wand_action
+from watergym.vessels.moth_vessel import HULL_BOTTOM_Z, WAND_GEARING, wand_action
 
-head_seas = SeaState(hs=0.3, tp=3.0, heading=math.pi, spreading=10.0, num_components=48)
+head_seas = SeaState(hs=0.3, tp=3.0, heading_rad=math.pi, spreading=10.0, num_components=48)
 env = WaterEnv(moth(), num_envs=4, sea_state=head_seas)
 env.reset(seed=0)
 
@@ -25,7 +25,7 @@ for step in range(500):  # 500 x 0.02 s = 10 s
         print(f"t={env.t[0]:.0f}s ride height {ride:.2f} m, speed {env.nu[0, 0]:.1f} m/s")
 ```
 
-`heading=math.pi` means the waves travel toward the boat, so it flies into them. Without a controller the Moth cannot stay up, so `wand_action` plays the part of the sailor's wand. It reads the water height under the wand pivot and returns a full action.
+`heading_rad=math.pi` means the waves travel toward the boat, so it flies into them. Without a controller the Moth cannot stay up, so `wand_action` plays the part of the sailor's wand. It reads the water height under the wand pivot and returns a full action.
 
 ## What the action means
 
@@ -68,7 +68,7 @@ Run the same boat in flat water, then in bigger head seas. Env 0 reports.
 
 ```python
 def fly(hs, seconds=10.0, gain=1.0):
-    sea_state = SeaState(hs=hs, tp=3.0, heading=math.pi, spreading=10.0, num_components=48)
+    sea_state = SeaState(hs=hs, tp=3.0, heading_rad=math.pi, spreading=10.0, num_components=48)
     env = WaterEnv(moth(), num_envs=4, sea_state=sea_state)
     env.reset(seed=0)
     heights = []
@@ -92,6 +92,7 @@ In flat water the height moves only while the boat settles from its start. Waves
 The wand turns water height into a flap angle: `WAND_GEARING` radians of flap per radian of wand swing. The `gain` argument above scales that command, so `gain=0` is a dead wand and `gain=0.3` is a weak one:
 
 ```python
+print(f"flap per wand swing at gain 1: {WAND_GEARING} rad/rad")
 for gain in (0.0, 0.3, 1.0, 2.0):
     h = fly(hs=0.0, gain=gain)
     print(f"gain {gain}: ride height after 10 s {h[-1, 0]:.2f} m")

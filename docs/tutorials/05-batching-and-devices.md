@@ -13,16 +13,15 @@ import torch
 from watergym import SeaState, WaterEnv
 from watergym.vessels import box_barge
 
-waves = SeaState(hs=1.0, tp=5.0, heading=math.pi / 2)
+waves = SeaState(hs=1.0, tp=5.0, heading_rad=math.pi / 2)
 
 
 def run(num_envs, steps=20, device="cpu"):
     env = WaterEnv(box_barge(), num_envs, waves, dt=0.05, device=device)
     env.reset(seed=0)
-    no_action = torch.zeros(num_envs, 0, device=device)
     start = time.perf_counter()
     for _ in range(steps):
-        env.step(no_action)
+        env.step(None)
     return env, time.perf_counter() - start
 
 
@@ -44,7 +43,7 @@ print("same seed, same result:", torch.equal(env_a.eta, env_b.eta))
 
 env_c = WaterEnv(box_barge(), 4, waves, dt=0.05)
 env_c.reset(seed=1)
-env_c.step(torch.zeros(4, 0))
+env_c.step(None)
 print("other seed differs:", not torch.equal(env_a.eta[:, 2], env_c.eta[:, 2]))
 
 print("envs differ from each other:", env_a.eta[:, 2].tolist())
@@ -78,19 +77,10 @@ Examples take `--device mps` or `--device cuda` where they have a `--device` fla
 ## Draw a few envs out of many
 
 ```python
-from dataclasses import fields
-
-from watergym.waves import Sea
 from watergym.viewer import WaterViewer, make_viewer
-
-
-def first_seas(sea, count):
-    return Sea(**{f.name: getattr(sea, f.name)[:count] for f in fields(sea)})
-
 
 env = WaterEnv(box_barge(), 64, waves, dt=0.05)
 env.reset(seed=0)
-no_action = torch.zeros(64, 0)
 
 shown = 4
 viewer = make_viewer("gl")
@@ -98,12 +88,12 @@ scene = WaterViewer(viewer, num_envs=shown, patch_size_m=30.0, patch_resolution=
 scene.look_at_grid(distance=0.8, pitch_deg=-20.0, yaw_deg=30.0)
 
 while viewer.is_running() and env.t[0] < 3.0:
-    env.step(no_action)
-    scene.draw(env.t[:shown], first_seas(env.sea, shown), env.vessel, env.eta[:shown])
+    env.step(None)
+    scene.draw(env.t[:shown], env.sea.subset(slice(0, shown)), env.vessel, env.eta[:shown])
 viewer.close()
 ```
 
-`WaterViewer` builds a mesh patch per env and copies the data to the host every frame, so its cost grows with the number of envs drawn. Past a few dozen, drawing costs more than the physics. The viewer's `num_envs` must equal the length of what you pass to `draw`, so slice the time, the sea and the poses to the first `shown` envs. Slicing the sea needs the small helper above, because `Sea` has no slicing method.
+`WaterViewer` builds a mesh patch per env and copies the data to the host every frame, so its cost grows with the number of envs drawn. Past a few dozen, drawing costs more than the physics. The viewer's `num_envs` must equal the length of what you pass to `draw`, so slice the time, the sea and the poses to the first `shown` envs. `Sea.subset` takes a slice, a list of env ids or a tensor of ids.
 
 A good habit: simulate thousands, draw four, print summary numbers for all.
 

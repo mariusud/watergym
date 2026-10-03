@@ -8,7 +8,7 @@ from watergym.env import SeaState, WaterEnv
 from watergym.hydrostatics import hydrostatic_force
 from watergym.rigid_body import Pose
 from watergym.vessel import gravity_force
-from watergym.vessels.box_barge import BEAM_M, LENGTH_M, MASS_KG, box_barge
+from watergym.vessels.box_barge_vessel import BEAM_M, LENGTH_M, MASS_KG, box_barge
 from watergym.waves import regular_wave
 
 CALM = regular_wave(1, amplitude=0.0, period=5.0)

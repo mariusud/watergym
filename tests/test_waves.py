@@ -52,3 +52,17 @@ def test_surface_rises_at_the_vertical_orbital_velocity() -> None:
     rise_rate = (elevation(sea, point, t + dt) - elevation(sea, point, t - dt)) / (2 * dt)
     upward_velocity = -orbital_velocity(sea, point, t)[..., 2]
     assert rise_rate == pytest.approx(upward_velocity, rel=1e-3, abs=1e-4)
+
+
+def test_subset_keeps_the_selected_envs_for_slices_lists_and_tensors() -> None:
+    sea = make_sea(5, 1.0, 6.0, heading_rad=math.pi)
+    for index in (slice(1, 3), [1, 2], torch.tensor([1, 2])):
+        part = sea.subset(index)
+        assert part.num_envs == 2
+        assert torch.equal(part.phase, sea.phase[1:3])
+        assert torch.equal(part.amplitude, sea.amplitude[1:3])
+
+
+def test_heading_rad_sets_the_wave_direction() -> None:
+    assert (make_sea(2, 1.0, 6.0, heading_rad=math.pi).direction == math.pi).all()
+    assert (regular_wave(2, 1.0, 6.0, heading_rad=math.pi / 2).direction == math.pi / 2).all()

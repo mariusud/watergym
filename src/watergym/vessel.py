@@ -15,7 +15,7 @@ from watergym.foils import Foil, FoilLoads, foil_loads, foil_wrench
 from watergym.geometry import Mesh, Vec3, VolumeSamples
 from watergym.hydrostatics import WATER_DENSITY, hydrostatic_force
 from watergym.rigid_body import Derivative, Pose, RigidBody, acceleration, kinematics
-from watergym.waves import GRAVITY, Sea
+from watergym.waves import GRAVITY, Sea, Water, water_at
 
 Vec6 = tuple[float, float, float, float, float, float]
 
@@ -25,10 +25,25 @@ class Thruster:
     position: Vec3
     direction: Vec3
     max_force_n: float
+    force_vector: Tensor = field(init=False)
+    position_vector: Tensor = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.force_vector = self.max_force_n * torch.tensor(self.direction)
+        self.position_vector = torch.tensor(self.position)
+
+    def to(self, device: str | torch.device) -> "Thruster":
+        moved = replace(self)
+        moved.force_vector = self.force_vector.to(device)
+        moved.position_vector = self.position_vector.to(device)
+        return moved
 
 
 @dataclass
 class Vessel:
+    """`hull` must put the centre of buoyancy above the centre of gravity (body origin), or an
+    un-actuated vessel tumbles: unequal added masses give a Munk moment that tips it over."""
+
     name: str
     body: RigidBody
     hull: VolumeSamples
@@ -49,7 +64,13 @@ class Vessel:
         return len(self.thrusters) + len(self.flapped_foils)
 
     def to(self, device: str | torch.device) -> "Vessel":
-        return replace(self, body=self.body.to(device), hull=self.hull.to(device))
+        return replace(
+            self,
+            body=self.body.to(device),
+            hull=self.hull.to(device),
+            foils=[foil.to(device) for foil in self.foils],
+            thrusters=[thruster.to(device) for thruster in self.thrusters],
+        )
 
 
 def gravity_force(mass: float, pose: Pose) -> Tensor:
@@ -62,13 +83,9 @@ def thrust_force(thrusters: list[Thruster], commands: Tensor) -> Tensor:
     """Thruster forces and moments in the body frame, commands [envs, num_thrusters]."""
     tau = torch.zeros(commands.shape[0], 6, device=commands.device)
     for i, thruster in enumerate(thrusters):
-        position = torch.tensor(thruster.position, device=commands.device)
-        force = (
-            commands[:, i, None]
-            * thruster.max_force_n
-            * torch.tensor(thruster.direction, device=commands.device)
-        )
-        tau += torch.cat((force, torch.linalg.cross(position.expand_as(force), force)), dim=-1)
+        force = commands[:, i, None] * thruster.force_vector
+        moment = torch.linalg.cross(thruster.position_vector.expand_as(force), force)
+        tau += torch.cat((force, moment), dim=-1)
     return tau
 
 
@@ -79,13 +96,32 @@ def flap_angles(vessel: Vessel, action: Tensor) -> list[Tensor]:
     return [next(flap_commands) * foil.max_flap if foil.has_flap else zero for foil in vessel.foils]
 
 
+def water_around(vessel: Vessel, sea: Sea, t: Tensor, pose: Pose) -> list[Water]:
+    """The sea at the hull samples, then at each foil's strips, from one evaluation."""
+    point_sets = [vessel.hull.centers] + [foil.strip_centers for foil in vessel.foils]
+    water = water_at(sea, pose.to_world(torch.cat(point_sets)), t)
+    sizes = [len(points) for points in point_sets]
+    return [Water(*parts) for parts in zip(*(x.split(sizes, dim=1) for x in water), strict=True)]
+
+
 def all_foil_loads(
-    vessel: Vessel, sea: Sea, t: Tensor, pose: Pose, nu: Tensor, action: Tensor, ventilated: Tensor
+    vessel: Vessel,
+    sea: Sea,
+    t: Tensor,
+    pose: Pose,
+    nu: Tensor,
+    action: Tensor,
+    ventilated: Tensor,
+    waters: list[Water] | None = None,
 ) -> list[FoilLoads]:
-    """Loads on every foil; `ventilated` is [envs, num_foils] bool."""
+    """Loads on every foil; `ventilated` is [envs, num_foils] bool. `waters` is the output of
+    `water_around` if the caller has it."""
     flaps = flap_angles(vessel, action)
+    foil_waters = (waters or water_around(vessel, sea, t, pose))[1:]
     return [
-        foil_loads(foil, sea, t, pose, nu, flaps[i], ventilated[:, i], vessel.density)
+        foil_loads(
+            foil, sea, t, pose, nu, flaps[i], ventilated[:, i], vessel.density, foil_waters[i]
+        )
         for i, foil in enumerate(vessel.foils)
     ]
 
@@ -94,13 +130,13 @@ def generalized_force(
     vessel: Vessel, sea: Sea, t: Tensor, pose: Pose, nu: Tensor, action: Tensor, ventilated: Tensor
 ) -> Tensor:
     """tau [envs, 6] in the body frame."""
+    waters = water_around(vessel, sea, t, pose)
     tau = gravity_force(vessel.body.mass, pose)
-    tau = tau + hydrostatic_force(vessel.hull, sea, t, pose, vessel.density)
+    tau = tau + hydrostatic_force(vessel.hull, sea, t, pose, vessel.density, waters[0])
     tau = tau + thrust_force(vessel.thrusters, action[:, : len(vessel.thrusters)])
-    for foil, loads in zip(
-        vessel.foils, all_foil_loads(vessel, sea, t, pose, nu, action, ventilated), strict=True
-    ):
-        tau = tau + foil_wrench(foil, loads)
+    loads = all_foil_loads(vessel, sea, t, pose, nu, action, ventilated, waters)
+    for foil, foil_load in zip(vessel.foils, loads, strict=True):
+        tau = tau + foil_wrench(foil, foil_load)
     return tau
 
 

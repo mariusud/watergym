@@ -108,7 +108,7 @@ The mesh follows `vessel.name`, so give each vessel type a unique name.
 ## Try this
 
 - Make a vertical thruster pair at `y = +-0.15` and watch roll appear when you drive them unevenly.
-- Add a `Foil` to `foils=[...]` (see `src/watergym/vessels/moth.py`) for a vessel that flies. Foil flaps add entries after the thrusters in the action vector.
+- Add a `Foil` to `foils=[...]` (see `src/watergym/vessels/moth_vessel.py`) for a vessel that flies. Foil flaps add entries after the thrusters in the action vector.
 - Set `free_dofs=(True, False, True, False, True, False)` to lock sway, roll and yaw to zero, as the Moth does.
 
 Next: [5. Batching and devices](05-batching-and-devices.md).
