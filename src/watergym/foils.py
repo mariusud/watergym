@@ -53,7 +53,8 @@ class Foil:
     span_axis: Vec3 = (0.0, 1.0, 0.0)
     chord_axis: Vec3 = (1.0, 0.0, 0.0)
     incidence: float = 0.0
-    lift_slope: float = 2 * math.pi
+    # None: Helmbold's slope for the geometric aspect ratio span / chord.
+    lift_slope: float | None = None
     stall_angle: float = math.radians(12)
     zero_lift_drag: float = 0.008
     oswald_efficiency: float = 0.9
@@ -75,6 +76,8 @@ class Foil:
     chord_vector: Tensor = field(init=False)
 
     def __post_init__(self) -> None:
+        if self.lift_slope is None:
+            self.lift_slope = helmbold_lift_slope(self.aspect_ratio)
         offsets = (torch.arange(self.num_strips) + 0.5) / self.num_strips - 0.5
         self.span_vector = torch.tensor(self.span_axis)
         self.chord_vector = torch.tensor(self.chord_axis)

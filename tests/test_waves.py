@@ -3,6 +3,7 @@ import math
 import pytest
 import torch
 
+from watergym import waves
 from watergym.waves import (
     elevation,
     jonswap,
@@ -66,3 +67,12 @@ def test_subset_keeps_the_selected_envs_for_slices_lists_and_tensors() -> None:
 def test_heading_rad_sets_the_wave_direction() -> None:
     assert (make_sea(2, 1.0, 6.0, heading_rad=math.pi).direction == math.pi).all()
     assert (regular_wave(2, 1.0, 6.0, heading_rad=math.pi / 2).direction == math.pi / 2).all()
+
+
+def test_water_in_chunks_matches_one_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    sea = make_sea(3, 1.0, 6.0, num_components=16, spreading=10.0)
+    points = torch.randn(3, 10, 3)
+    whole = waves.water_at(sea, points, 2.0)
+    monkeypatch.setattr(waves, "MAX_CHUNK_ELEMENTS", 3 * 16 * 4)
+    for chunked, expected in zip(waves.water_at(sea, points, 2.0), whole, strict=True):
+        assert torch.allclose(chunked, expected)

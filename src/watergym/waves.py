@@ -1,7 +1,7 @@
 """Irregular seas as a sum of linear (Airy) wave components, one sea per environment.
 
-Frames follow Fossen: NED world, z points down. The wave elevation `eta` is positive up,
-so the instantaneous surface sits at z = -eta and a point is wet when z + eta > 0.
+Frames follow Fossen: NED world, z points down. The wave elevation zeta is positive up,
+so the instantaneous surface sits at z = -zeta and a point is wet when z + zeta > 0.
 """
 
 import math
@@ -157,8 +157,10 @@ def water_at(sea: Sea, points: Tensor, t: Tensor | float) -> Water:
     chunks of at most MAX_CHUNK_ELEMENTS per tensor. Points above the mean level use the
     mean-level velocity and acceleration (constant extrapolation).
     """
+    # Under torch.compile the fused kernels never hold these tensors, and chunks would push
+    # a Metal kernel past its 31 buffer arguments.
     points_per_chunk = max(1, MAX_CHUNK_ELEMENTS // sea.amplitude.numel())
-    if points.shape[-2] > points_per_chunk:
+    if points.shape[-2] > points_per_chunk and not torch.compiler.is_compiling():
         chunks = [water_at(sea, part, t) for part in points.split(points_per_chunk, dim=-2)]
         return Water(*(torch.cat(parts, dim=1) for parts in zip(*chunks, strict=True)))
 

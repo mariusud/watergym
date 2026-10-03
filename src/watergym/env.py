@@ -93,14 +93,18 @@ class WaterEnv:
         frozen_waves: bool = False,
         compile: bool = False,
     ) -> None:
-        """`frozen_waves` and `compile` trade accuracy or start-up time for speed; both are
-        off by default. See research/16-performance.md for measurements.
+        """`frozen_waves` and `compile` are off by default. Measured on an M-series Mac with a
+        Moth in 48-component seas:
 
-        frozen_waves: evaluate the sea once per step instead of at every RK4 stage. About 5x
-            faster on CPU; at hs 1 m the trajectories drift by up to a few cm over 4 s.
-        compile: run the physics of a step through torch.compile. About 4x faster on MPS
-            and on CPU below about 16 envs, slower on CPU at 64 envs and up (inductor's ARM
-            cos and sin are scalar). The first step takes about 30 s to compile.
+        frozen_waves: evaluate the sea at the hull and foils once per step, at mid-step,
+            instead of at each of the 8 RK4 stages. 2-2.6x faster on CPU at 1024 envs and
+            up, 1.5-2x on MPS. An approximation: at hs 1 m the four bundled vessels drift
+            from the exact trajectories by at most 2e-5 to 1e-2 (m, rad, m/s) over 4 s.
+        compile: run the physics of a step through torch.compile, same results to float32
+            rounding. 3.4-5x faster on MPS (64 to 4096 envs) and 2.5-4x on CPU at 1 to 8
+            envs, but slower on CPU from about 32 envs (inductor's ARM cos and sin are
+            scalar). The first step takes about 30 s to compile. With torch 2.14 on MPS it
+            fails together with frozen_waves: a fused Metal kernel needs too many buffers.
         """
         self.vessel = vessel.to(device)
         self.num_envs = num_envs
@@ -119,6 +123,10 @@ class WaterEnv:
         zeros = torch.zeros(num_envs, 6, device=self.device)
         self.eta, self.nu = zeros.clone(), zeros.clone()
         self.t = torch.zeros(num_envs, device=self.device)
+        # Episodes end on a step count: summed float32 time reaches 1 s only after 51 steps
+        # of 0.02 s.
+        self.max_steps = round(episode_length_s / dt)
+        self.steps = torch.zeros(num_envs, dtype=torch.long, device=self.device)
         self.action = torch.zeros(num_envs, vessel.num_actions, device=self.device)
         self.ventilated = torch.zeros(
             num_envs, len(vessel.foils), dtype=torch.bool, device=self.device
@@ -162,11 +170,14 @@ class WaterEnv:
             self.frozen_waves,
         )
 
-        reward = self.reward_fn(self)
+        self.steps += 1
+
+        # A diverged env ends with reward 0, so no NaN reaches the learner.
+        diverged = ~(torch.isfinite(self.eta).all(-1) & torch.isfinite(self.nu).all(-1))
+        reward = torch.where(diverged, 0.0, self.reward_fn(self))
         tilt = self.eta[:, 3:5].abs().amax(-1)
-        terminated = (tilt > self.max_tilt) | ~torch.isfinite(self.eta).all(-1)
-        terminated = terminated | self.termination_fn(self)
-        truncated = self.t >= self.episode_length_s
+        terminated = (tilt > self.max_tilt) | diverged | self.termination_fn(self)
+        truncated = self.steps >= self.max_steps
         info = {"final_obs": self.observe()}
         done = (terminated | truncated).nonzero().squeeze(-1)
         if len(done):
@@ -198,6 +209,7 @@ class WaterEnv:
         self.eta[env_ids] = torch.tensor(self.vessel.initial_eta, device=self.device)
         self.nu[env_ids] = torch.tensor(self.vessel.initial_nu, device=self.device)
         self.t[env_ids] = 0.0
+        self.steps[env_ids] = 0
         self.ventilated[env_ids] = False
         self.wetting_time[env_ids] = 0.0
         self.sea.replace(env_ids, self._sample_sea(len(env_ids)))

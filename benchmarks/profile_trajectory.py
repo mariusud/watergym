@@ -1,12 +1,14 @@
 """Save or check reference trajectories for all four vessels at hs = 1.0.
 
     uv run benchmarks/profile_trajectory.py save ref.pt
-    uv run benchmarks/profile_trajectory.py check ref.pt [--frozen-waves] [--num-components 32]
+    uv run benchmarks/profile_trajectory.py check ref.pt --env-kwargs "{'frozen_waves': True}"
 
-Prints the largest |difference| in eta and nu over 200 steps, per vessel, absolute and\nrelative to |x| + 1 (float32 resolves positions of 30 m only to about 4e-6).
+Prints the largest |difference| in eta and nu over 200 steps, per vessel, absolute and
+relative to |x| + 1 (float32 resolves positions of 30 m only to about 4e-6).
 """
 
 import argparse
+import ast
 import math
 
 import torch
@@ -29,7 +31,9 @@ args = parser.parse_args()
 def trajectory(factory) -> tuple[torch.Tensor, torch.Tensor]:
     vessel = factory()
     sea = SeaState(hs=1.0, tp=6.0, heading_rad=math.pi, spreading=10.0)
-    env = WaterEnv(vessel, args.num_envs, sea, device=args.device, **eval(args.env_kwargs))
+    env = WaterEnv(
+        vessel, args.num_envs, sea, device=args.device, **ast.literal_eval(args.env_kwargs)
+    )
     env.reset(seed=0)
     env.nu += args.perturb
     commands = torch.linspace(-0.5, 0.5, args.num_envs, device=env.device)[:, None]
@@ -57,5 +61,7 @@ else:
         relative = (diff / (ref_states.abs() + 1)).amax().item()
         vent_flips = (vents != reference[name][1]).sum().item()
         per_dof = " ".join(f"{d:.1e}" for d in worst.tolist())
-        print(f"{name:10s} max |d| {diff.amax():.2e}  max |d|/(|x|+1) {relative:.2e}  "
-              f"vent flips {vent_flips}  per state [{per_dof}]")
+        print(
+            f"{name:10s} max |d| {diff.amax():.2e}  max |d|/(|x|+1) {relative:.2e}  "
+            f"vent flips {vent_flips}  per state [{per_dof}]"
+        )

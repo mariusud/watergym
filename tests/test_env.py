@@ -81,3 +81,37 @@ def test_termination_fn_ends_and_resets_the_chosen_envs() -> None:
     assert terminated.tolist() == [True, False, False]
     assert env.t[0] == 0.0
     assert env.t[1] > 0.0
+
+
+def test_frozen_waves_stay_close_to_the_exact_sea() -> None:
+    envs = [
+        WaterEnv(box_barge(), 2, SeaState(hs=1.0, tp=6.0), frozen_waves=frozen)
+        for frozen in (False, True)
+    ]
+    for env in envs:
+        env.reset(seed=0)
+        for _ in range(50):
+            env.step(None)
+    assert torch.allclose(envs[0].eta, envs[1].eta, atol=1e-3)
+    assert not torch.equal(envs[0].eta, envs[1].eta)
+
+
+def test_episodes_end_on_a_step_count_not_summed_time() -> None:
+    # float32 time summed in 0.01 s substeps reaches 1.0 only after 51 steps
+    env = WaterEnv(box_barge(), 1, episode_length_s=1.0, dt=0.02)
+    env.reset()
+    for _ in range(49):
+        _, _, _, truncated, _ = env.step(None)
+        assert not truncated.any()
+    _, _, _, truncated, _ = env.step(None)
+    assert truncated.all()
+    assert (env.steps == 0).all()
+
+
+def test_diverged_env_terminates_with_a_finite_reward() -> None:
+    env = WaterEnv(box_barge(), 2, reward_fn=lambda env: env.nu[:, 0])
+    env.reset(seed=0)
+    env.nu[0, 0] = float("nan")
+    _, reward, terminated, _, _ = env.step(None)
+    assert torch.isfinite(reward).all()
+    assert terminated.tolist() == [True, False]

@@ -8,6 +8,7 @@ allocation (which keeps freed blocks cached, so it tracks the peak) on MPS.
 """
 
 import argparse
+import ast
 import json
 import math
 import resource
@@ -38,10 +39,17 @@ def measure(num_envs: int) -> dict:
     from watergym import SeaState, WaterEnv, vessels
     from watergym.vessels.moth_vessel import wand_action
 
-    sea = SeaState(1.0 if args.vessel != "moth" else 0.3, 3.0, math.pi, 10.0, num_components=args.components)
+    sea = SeaState(
+        1.0 if args.vessel != "moth" else 0.3, 3.0, math.pi, 10.0, num_components=args.components
+    )
     rss_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    env = WaterEnv(getattr(vessels, args.vessel)(), num_envs, sea, device=args.device,
-                   **eval(args.env_kwargs))
+    env = WaterEnv(
+        getattr(vessels, args.vessel)(),
+        num_envs,
+        sea,
+        device=args.device,
+        **ast.literal_eval(args.env_kwargs),
+    )
     env.reset(seed=0)
     zero = torch.zeros(num_envs, env.vessel.num_actions, device=env.device)
 
@@ -73,12 +81,16 @@ def measure(num_envs: int) -> dict:
 if args.child:
     print(json.dumps(measure(args.num_envs[0])))
 else:
-    print(f"{args.vessel} on {args.device}, {args.components} components, threads {torch.get_num_threads()}")
+    threads = torch.get_num_threads()
+    print(f"{args.vessel} on {args.device}, {args.components} components, threads {threads}")
     print(f"{'envs':>6} {'steps/s':>9} {'env-steps/s':>12} {'kB/env':>8}")
     for n in args.num_envs:
         cmd = [sys.executable, *sys.argv, "--child", "--num-envs", str(n)]
         result = json.loads(subprocess.run(cmd, capture_output=True, text=True, check=True).stdout)
-        print(f"{n:>6} {result['steps_per_s']:>9.1f} {result['env_steps_per_s']:>12.0f} "
-              f"{result['bytes_per_env'] / 1e3:>8.1f}", flush=True)
+        print(
+            f"{n:>6} {result['steps_per_s']:>9.1f} {result['env_steps_per_s']:>12.0f} "
+            f"{result['bytes_per_env'] / 1e3:>8.1f}",
+            flush=True,
+        )
         if args.device == "mps":
             time.sleep(3)

@@ -28,8 +28,14 @@ def lift_coefficient(foil: Foil, depth_m: float) -> float:
 
 def test_deep_thin_foil_lifts_two_pi_alpha() -> None:
     alpha = math.radians(2)
-    foil = Foil("wing", (0.0, 0.0, 0.0), span_m=1.0, chord_m=0.1, incidence=alpha)
+    foil = Foil("wing", (0.0, 0.0, 0.0), 1.0, 0.1, incidence=alpha, lift_slope=2 * math.pi)
     assert lift_coefficient(foil, depth_m=1.0) == pytest.approx(2 * math.pi * alpha, rel=0.02)
+
+
+def test_default_lift_slope_is_helmbold_for_foils_and_struts() -> None:
+    foil = Foil("wing", (0.0, 0.0, 0.0), span_m=1.0, chord_m=0.25)
+    strut = Foil("strut", (0.0, 0.0, 0.0), 1.0, 0.25, span_axis=(0.0, 0.0, 1.0))
+    assert foil.lift_slope == strut.lift_slope == helmbold_lift_slope(4.0)
 
 
 def test_helmbold_slope_at_aspect_ratio_four() -> None:
@@ -73,7 +79,7 @@ def test_surface_piercing_strut_lifts_from_immersed_span_only() -> None:
     side_force = loads.force[0, :, 1]
     assert torch.all(side_force[loads.depth[0] < -strut.immersion_band / 2] == 0)
     immersed_area = 0.5 * strut.span_m * strut.chord_m
-    expected = 0.5 * 1025.0 * SPEED**2 * immersed_area * 2 * math.pi * alpha
+    expected = 0.5 * 1025.0 * SPEED**2 * immersed_area * strut.lift_slope * alpha
     assert side_force.sum().item() == pytest.approx(expected, rel=0.01)
 
 

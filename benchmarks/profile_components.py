@@ -26,7 +26,9 @@ args = parser.parse_args()
 
 hs, tp = (0.3, 3.0) if args.vessel == "moth" else (1.0, 6.0)
 print(f"{args.vessel}, hs {hs} tp {tp}, {args.num_envs} envs, {args.steps} steps")
-print(f"{'comp':>5} {'env-steps/s':>12} {'std z':>8} {'std pitch':>10} {'std elev':>9} {'resets':>7}")
+print(
+    f"{'comp':>5} {'env-steps/s':>12} {'std z':>8} {'std pitch':>10} {'std elev':>9} {'resets':>7}"
+)
 for num in args.components:
     sea = SeaState(hs, tp, math.pi, 10.0, num_components=num)
     env = WaterEnv(getattr(vessels, args.vessel)(), args.num_envs, sea)
@@ -44,5 +46,7 @@ for num in args.components:
             records.append(torch.stack((env.eta[:, 2], env.eta[:, 4], wave), -1))
     rate = args.steps * args.num_envs / (time.perf_counter() - start)
     std = torch.stack(records).std(0).mean(0)
-    print(f"{num:>5} {rate:>12.0f} {std[0]:>8.4f} {math.degrees(std[1]):>9.3f}° {std[2]:>9.4f} "
-          f"{resets:>7}")
+    print(
+        f"{num:>5} {rate:>12.0f} {std[0]:>8.4f} {math.degrees(std[1]):>9.3f}° {std[2]:>9.4f} "
+        f"{resets:>7}"
+    )

@@ -1,6 +1,6 @@
 """Top operators by self CPU time for a few env steps.
 
-    OMP_NUM_THREADS=2 uv run benchmarks/profile_ops.py --vessel moth --num-envs 1024
+OMP_NUM_THREADS=2 uv run benchmarks/profile_ops.py --vessel moth --num-envs 1024
 """
 
 import argparse
