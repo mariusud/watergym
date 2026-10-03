@@ -1,6 +1,6 @@
 # 2. Make it float
 
-A box barge dropped into flat water should settle at the draft Archimedes predicts. Here it does.
+A box barge dropped into flat water should settle at the draft Archimedes predicts, 1.000 m for this one.
 
 ## Build the environment
 

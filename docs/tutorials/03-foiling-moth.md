@@ -58,7 +58,7 @@ for foil, load in zip(env.vessel.foils, loads):
 print("weight", env.vessel.body.mass * 9.81, "N, ventilated", env.ventilated[0].tolist())
 ```
 
-`load.force` is `[envs, strips, 3]` in the body frame (x forward, z down), so lift up is minus z. The main foil carries the whole weight (it read 1410 N against a weight of 1128 N here, because the boat was accelerating upward), the rudder foil trims pitch with 43 N of downforce, and drag shows up as negative x. The flow angle `alpha` and the `ventilated` flags come from the [foils](../concepts/05-foils.md) model. A ventilated foil has lost most of its lift.
+`load.force` is `[num_envs, strips, 3]` in the body frame (x forward, z down), so lift up is minus z. The main foil carries the whole weight (it read 1410 N against a weight of 1128 N here, because the boat was accelerating upward), the rudder foil trims pitch with 43 N of downforce, and drag shows up as negative x. The flow angle `alpha` and the `ventilated` flags come from the [foils](../concepts/05-foils.md) model. A ventilated foil has lost most of its lift.
 
 ## Change the sea
 

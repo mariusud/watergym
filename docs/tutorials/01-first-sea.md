@@ -26,7 +26,7 @@ height = elevation(sea, points, t)  # [4, 3], metres, positive up
 print(height)
 ```
 
-Points are `[envs, points, 3]` in the NED world frame ([frames](../concepts/01-frames-and-state.md)). Only x and y matter for `elevation`. `t` is one time per env. The result is the surface height, positive up, so a crest reads positive even though NED z points down.
+Points are `[num_envs, points, 3]` in the NED world frame ([frames](../concepts/01-frames-and-state.md)). Only x and y matter for `elevation`. `t` is one time per env. The result is the surface height, positive up, so a crest reads positive even though NED z points down.
 
 Step time and the surface moves:
 
