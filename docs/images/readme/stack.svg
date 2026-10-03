@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-label="WaterGym layers from waves to trainer, with a viewer attached to the env" viewBox="0 0 1060 280"><style>
+  :root { --ink: #1f2328; --muted: #57606a; --fill: #0969da; --line: #0969da;
+          --accent: #bf5700; }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink: #e6edf3; --muted: #9da7b3; --fill: #58a6ff; --line: #58a6ff; --accent: #f0883e; }
+  }
+  .box { fill: var(--fill); fill-opacity: 0.12; stroke: var(--line); stroke-width: 1.5; }
+  .viewer { fill: var(--accent); fill-opacity: 0.1; stroke: var(--accent); stroke-width: 1.5;
+            stroke-dasharray: 6 4; }
+  .title { fill: var(--ink); font: 600 17px -apple-system, "Segoe UI", Helvetica, sans-serif; }
+  .note { fill: var(--muted); font: 13px -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+  .arrow { stroke: var(--line); stroke-width: 1.8; fill: none; marker-end: url(#head); }
+  .dashed { stroke: var(--accent); stroke-width: 1.8; fill: none; stroke-dasharray: 6 4;
+            marker-end: url(#head-accent); }
+  #head path { fill: var(--line); }
+  #head-accent path { fill: var(--accent); }
+</style><defs><marker id="head" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z"/></marker><marker id="head-accent" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z"/></marker></defs><rect class="box" x="20" y="40" width="180" height="92" rx="10"/><text class="title" x="110.0" y="72" text-anchor="middle">Waves</text><text class="note" x="110.0" y="96" text-anchor="middle">JONSWAP spectrum</text><text class="note" x="110.0" y="114" text-anchor="middle">random phases per env</text><rect class="box" x="230" y="40" width="180" height="92" rx="10"/><text class="title" x="320.0" y="72" text-anchor="middle">Hydrostatics + foils</text><text class="note" x="320.0" y="96" text-anchor="middle">buoyancy, lift and drag</text><text class="note" x="320.0" y="114" text-anchor="middle">foil ventilation</text><path class="arrow" d="M204 86.0 H226"/><rect class="box" x="440" y="40" width="180" height="92" rx="10"/><text class="title" x="530.0" y="72" text-anchor="middle">6-DOF rigid body</text><text class="note" x="530.0" y="96" text-anchor="middle">added mass, damping</text><text class="note" x="530.0" y="114" text-anchor="middle">RK4, NED frame</text><path class="arrow" d="M414 86.0 H436"/><rect class="box" x="650" y="40" width="180" height="92" rx="10"/><text class="title" x="740.0" y="72" text-anchor="middle">Batched WaterEnv</text><text class="note" x="740.0" y="96" text-anchor="middle">reset, step, reward</text><text class="note" x="740.0" y="114" text-anchor="middle">[envs, ...] tensors</text><path class="arrow" d="M624 86.0 H646"/><rect class="box" x="860" y="40" width="180" height="92" rx="10"/><text class="title" x="950.0" y="72" text-anchor="middle">rsl_rl / your trainer</text><text class="note" x="950.0" y="96" text-anchor="middle">PPO or any policy</text><text class="note" x="950.0" y="114" text-anchor="middle">obs in, actions out</text><path class="arrow" d="M834 86.0 H856"/><path class="dashed" d="M740.0 136 V184"/><rect class="viewer" x="650.0" y="188" width="180" height="72" rx="10"/><text class="title" x="740.0" y="220" text-anchor="middle">Newton viewer</text><text class="note" x="740.0" y="240" text-anchor="middle">optional, headless ok</text></svg>

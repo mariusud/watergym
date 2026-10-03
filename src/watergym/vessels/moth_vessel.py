@@ -11,7 +11,7 @@ import torch
 from torch import Tensor
 
 from watergym.foils import Foil, helmbold_lift_slope
-from watergym.geometry import box_mesh, box_samples
+from watergym.geometry import box_mesh, box_samples, triangle_panel
 from watergym.hydrostatics import WATER_DENSITY
 from watergym.rigid_body import Pose, RigidBody
 from watergym.vessel import Thruster, Vessel
@@ -86,7 +86,8 @@ def moth(main_foil_incidence_deg: float = 4.0, rudder_incidence_deg: float = 0.0
     hull_center = (0.0, 0.0, HULL_BOTTOM_Z - hull_size[2] / 2)
     wings = box_mesh((0.0, 0.0, -0.05), (0.8, 2.25, 0.03))
     mast = box_mesh((0.3, 0.0, -2.0), (0.05, 0.05, 4.0))
-    mesh = box_mesh(hull_center, hull_size) + wings + mast
+    sail = triangle_panel((0.3, 0.0, -3.9), (0.3, 0.0, -0.45), (-1.9, 0.0, -0.5))
+    mesh = box_mesh(hull_center, hull_size) + wings + mast + sail
     for foil in (main_foil, rudder_foil):
         mesh = mesh + box_mesh(foil.position, (foil.chord_m, foil.span_m, 0.015))
     for strut in struts:

@@ -45,6 +45,12 @@ class Mesh:
         )
 
 
+def triangle_panel(a: Vec3, b: Vec3, c: Vec3) -> Mesh:
+    """A flat triangle visible from both sides, for sails."""
+    vertices = torch.tensor([a, b, c, a, b, c])
+    return Mesh(vertices, torch.tensor([[0, 1, 2], [3, 5, 4]]))
+
+
 def box_samples(center: Vec3, size: Vec3, cells: tuple[int, int, int]) -> VolumeSamples:
     """Split a box of `size` (length, beam, height) into a regular grid of cells."""
     axes = [

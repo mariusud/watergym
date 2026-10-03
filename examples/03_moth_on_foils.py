@@ -8,6 +8,9 @@ Orange arrows are the lift and drag on every foil strip.
 
 import argparse
 import math
+import time
+
+import torch
 
 from watergym import SeaState, WaterEnv
 from watergym.vessels import moth
@@ -32,9 +35,14 @@ viewer = make_viewer(args.viewer, headless=args.headless)
 scene = WaterViewer(viewer, args.num_envs, patch_size_m=8.0, patch_resolution=48)
 scene.look_at_grid(distance=0.9, pitch_deg=-12.0, yaw_deg=70.0)
 
+ride_heights = []
+steps = 0
+start = time.perf_counter()
 while viewer.is_running() and env.t[0] < args.seconds:
     action = wand_action(env.sea, env.t, env.eta)
     env.step(action)
+    ride_heights.append((-env.eta[:, 2] - HULL_BOTTOM_Z).mean())
+    steps += 1
     scene.draw(env.t, env.sea, env.vessel, env.eta, env.foil_loads(), newton_per_m=300.0)
     viewer.log_scalar("hull bottom above mean water, env 0 [m]", -env.eta[0, 2] - HULL_BOTTOM_Z)
     viewer.log_scalar(
@@ -44,3 +52,11 @@ while viewer.is_running() and env.t[0] < args.seconds:
 if args.screenshot:
     scene.save_png(args.screenshot)
 viewer.close()
+
+if steps:
+    wall = time.perf_counter() - start
+    print(
+        f"{steps * env.dt:.1f} sim s, mean hull bottom above mean water "
+        f"{torch.stack(ride_heights).mean():.2f} m, "
+        f"{steps * args.num_envs / wall:.0f} env-steps/s"
+    )

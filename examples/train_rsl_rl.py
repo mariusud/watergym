@@ -2,6 +2,7 @@
 
 uv run --extra rl examples/train_rsl_rl.py --num-envs 1024 --iterations 300
 uv run --extra rl --extra viz examples/train_rsl_rl.py --play logs/rsl_rl/moth/<run>/model_299.pt
+uv run --extra rl --extra viz examples/train_rsl_rl.py --play <checkpoint> --viewer null --seconds 20
 """
 
 import argparse
@@ -21,7 +22,8 @@ parser.add_argument("--num-envs", type=int, default=1024)
 parser.add_argument("--iterations", type=int, default=300)
 parser.add_argument("--device", default="cpu")
 parser.add_argument("--viewer", default="gl", choices=["gl", "viser", "usd", "null"])
-parser.add_argument("--play", metavar="CHECKPOINT", help="draw this checkpoint instead of training")
+parser.add_argument("--play", metavar="CHECKPOINT", help="run this checkpoint instead of training")
+parser.add_argument("--seconds", type=float, default=20.0, help="--play length in sim seconds")
 args = parser.parse_args()
 
 
@@ -59,11 +61,30 @@ if args.play:
     scene = WaterViewer(viewer, num_envs, patch_size_m=8.0, patch_resolution=48)
     scene.look_at_grid(distance=0.9, pitch_deg=-12.0, yaw_deg=70.0)
     obs = runner.env.get_observations()
-    while viewer.is_running():
+    episode_reward = torch.zeros(num_envs)
+    finished_rewards = []
+    squared_errors = []
+    crashes = 0
+    for _ in range(round(args.seconds / env.dt)):
         with torch.inference_mode():
-            obs, *_ = runner.env.step(policy(obs))
+            obs, reward, dones, extras = runner.env.step(policy(obs))
+        episode_reward += reward
+        is_done = dones.bool()
+        crashes += int((is_done & (extras["time_outs"] == 0)).sum())
+        finished_rewards.extend(episode_reward[is_done].tolist())
+        episode_reward[is_done] = 0.0
+        squared_errors.append(((-env.eta[:, 2] + env.vessel.initial_eta[2]) ** 2)[~is_done])
         scene.draw(env.t, env.sea, env.vessel, env.eta, env.foil_loads(), newton_per_m=300.0)
+        if not viewer.is_running():
+            break
     viewer.close()
+    episode_rewards = finished_rewards + episode_reward.tolist()
+    ride_height_rms = torch.cat(squared_errors).mean().sqrt()
+    print(
+        f"{args.seconds:.0f} s x {num_envs} envs: "
+        f"mean episode reward {sum(episode_rewards) / len(episode_rewards):.1f}, "
+        f"ride-height RMS {ride_height_rms:.3f} m, crashes {crashes}"
+    )
 else:
     log_dir = Path("logs/rsl_rl/moth") / time.strftime("%Y%m%d-%H%M%S")
     runner = OnPolicyRunner(RslRlVecEnv(env), train_cfg, str(log_dir), args.device)
