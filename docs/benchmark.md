@@ -1,10 +1,10 @@
 # Benchmark: RideControl-Moth-v0
 
-A Moth flies into waves and a controller moves the main-foil flap to hold the hull 0.6 m above the mean water level. The score is a set of curves against sea state, never a single number: the same policy is run at every point of an (Hs, Tp, heading) grid on fixed evaluation seeds.
+An International Moth flies into waves and a controller moves the main-foil flap to hold the hull 0.6 m above the mean water level. The score is a set of curves against sea state, never a single number: the sweep runs the same policy at every point of an (Hs, Tp, heading) grid on fixed evaluation seeds.
 
 ## Evaluate a policy
 
-A policy is any callable from observations `[envs, 6]` to a flap command `[envs, 1]` in `[-1, 1]`.
+A policy is any callable from observations `[num_envs, 6]` to a flap command `[num_envs, 1]` in `[-1, 1]`.
 
 ```python
 import torch
@@ -34,7 +34,7 @@ uv run --with matplotlib python benchmarks/ride_control_sweep.py --policy wand m
 
 ## The task
 
-`step` takes the flap only. The sail stays at 0.65 of its 200 N, so speed is not something the policy can trade for height.
+`step` takes the flap only. The sail stays at 0.65 of its 200 N, so the policy cannot trade speed for height.
 
 Observations are what a real foiler can measure:
 
@@ -62,7 +62,7 @@ The reward, in `ride_control_reward`:
 - 20   * crashed
 ```
 
-The tracking terms are bounded in [0, 1], so a step in the air is always worth more than a crash.
+The tracking terms are bounded in [0, 1], so every airborne step scores above a crashed one.
 
 An episode ends on a crash or after 20 s. A crash is any of:
 
@@ -83,7 +83,9 @@ An episode ends on a crash or after 20 s. A crash is any of:
 
 Every count is divided by total sailed time, envs times seconds, so a policy that crashes often is not rewarded with shorter episodes.
 
-`comfort_awz_m_s2` follows ISO 2631-1:1997, *Mechanical vibration and shock: evaluation of human exposure to whole-body vibration*. The heave acceleration at the CG goes through the Wk weighting of Annex A: band limits at 0.4 and 100 Hz, an acceleration-velocity transition at 12.5 Hz and an upward step between 2.37 and 3.35 Hz. `metrics.py` builds it from the four analog filters, turns each into a biquad with the bilinear transform and runs them in series. The analog weighting matches the standard's table to 1 % from 0.1 to 31.5 Hz, and the 50 Hz digital filter matches it to 3 % from 0.5 to 8 Hz (`tests/test_tasks.py`). The standard's own comfort guide (Annex C) reads a_w below 0.315 m/s² as not uncomfortable and 0.8 to 1.6 m/s² as uncomfortable.
+`comfort_awz_m_s2` follows ISO 2631-1:1997, *Mechanical vibration and shock: evaluation of human exposure to whole-body vibration*. The standard's own comfort guide (Annex C) reads a_w below 0.315 m/s² as not uncomfortable and 0.8 to 1.6 m/s² as uncomfortable.
+
+The heave acceleration at the CG goes through the Wk weighting of Annex A: band limits at 0.4 and 100 Hz, an acceleration-velocity transition at 12.5 Hz and an upward step between 2.37 and 3.35 Hz. `metrics.py` builds it from the four analog filters, turns each into a biquad with the bilinear transform and runs them in series. The analog weighting matches the standard's table to 1 % from 0.1 to 31.5 Hz, and the 50 Hz digital filter matches it to 3 % from 0.5 to 8 Hz (`tests/test_tasks.py`).
 
 ## Baselines
 
@@ -91,14 +93,14 @@ Every count is divided by total sailed time, envs times seconds, so a policy tha
 
 From `--quick`: head seas, Tp 3 s.
 
-| Hs [m] | wand tracking [m] | wand flap [deg] | wand a_w [m/s²] | zero tracking [m] | zero crashes / min | zero a_w [m/s²] |
+| Hs [m] | wand tracking RMS [m] | wand flap RMS [deg] | wand a_w [m/s²] | zero-flap tracking RMS [m] | zero-flap crashes / min | zero-flap a_w [m/s²] |
 |---|---|---|---|---|---|---|
 | 0.0 | 0.069 | 0.39 | 0.04 | 0.27 | 18 | 0.03 |
 | 0.2 | 0.073 | 0.64 | 0.52 | 0.26 | 15 | 0.36 |
 | 0.4 | 0.084 | 1.15 | 1.07 | 0.25 | 12 | 0.73 |
 | 0.6 | 0.103 | 1.82 | 1.70 | 0.21 | 12 | 1.23 |
 
-The wand never crashes on this grid. It holds the boat about 0.07 m low in flat water, which is its whole tracking error there, and it follows the waves: the flap works harder and a_w climbs past 1 m/s² by Hs 0.4 m. A controller that platforms through the crests instead of following them should beat it on comfort. With the flap at zero the boat sinks onto its hull every few seconds. At Hs 0.6 m three of its crashes per minute are main-foil ventilation as the sinking foil nears the surface.
+The wand never crashes on this grid. It holds the Moth about 0.07 m low in flat water, which is its whole tracking error there, and it follows the waves: the flap works harder and a_w climbs past 1 m/s² by Hs 0.4 m. That leaves room on comfort for a controller that flies level through the crests. With the flap at zero the Moth sinks onto its hull 12 to 18 times a minute. At Hs 0.6 m three of its crashes per minute are main-foil ventilation as the sinking foil nears the surface.
 
 ## Versioning
 

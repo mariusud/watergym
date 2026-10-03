@@ -1,6 +1,6 @@
 # 5. Batching and devices
 
-You will scale from 1 env to 64, check that seeds repeat, move the state to another device, and draw a few envs out of many.
+The same `WaterEnv` runs 1 env or 64; only the leading dimension of each tensor changes.
 
 ## One tensor per quantity
 
@@ -32,7 +32,7 @@ for n in (1, 8, 64):
     )
 ```
 
-Every state has a leading `num_envs` dimension: `eta` and `nu` are `[num_envs, 6]`, and the sea tensors are `[num_envs, num_components]`. The loop is over time only. On CPU the time grows almost in proportion to the batch: 64 envs took about 28 times as long as one in a test run. The batch layout pays off on a GPU, where one kernel covers all envs ([batching](../concepts/06-batching.md)). Timings on your machine will differ.
+Every state has a leading `num_envs` dimension: `eta` and `nu` are `[num_envs, 6]`, and the sea tensors are `[num_envs, num_components]`. The loop is over time only. On CPU the time grows with the batch, but slower than the env count: in one run on a laptop CPU, 64 envs took 3.74 s against 0.17 s for one env, 22 times as long. The batch layout pays off on a GPU, where one kernel covers all envs ([batching](../concepts/06-batching.md)).
 
 ## Seeds
 
@@ -70,9 +70,9 @@ cpu_env, _ = run(64, steps=20, device="cpu")
 print("max difference to cpu [m]:", (env.eta.cpu() - cpu_env.eta).abs().max().item())
 ```
 
-Pass `device="cpu"`, `"mps"` or `"cuda"` to `WaterEnv`. The vessel, the sea and all state move to that device, and so must your actions: build them with `device=env.device`. The same code gives the same physics on every device up to float32 rounding, but chaotic motion can amplify the rounding over long runs, so compare short runs. Small batches can run faster on CPU, since each GPU kernel launch has a fixed cost. The GPU wins at hundreds or thousands of envs.
+Pass `device="cpu"`, `"mps"` or `"cuda"` to `WaterEnv`. The vessel, the sea and all state move to that device, and so must your actions: build them with `device=env.device`. The same code gives the same physics on every device up to float32 rounding, but chaotic motion can amplify the rounding over long runs, so compare short runs. [Batching](../concepts/06-batching.md#devices) covers when CPU beats GPU and how to pick `num_envs`.
 
-Examples take `--device mps` or `--device cuda` where they have a `--device` flag.
+`examples/02_floating_box.py`, `examples/03_moth_on_foils.py` and `examples/train_rsl_rl.py` take `--device mps` or `--device cuda`.
 
 ## Draw a few envs out of many
 
@@ -93,8 +93,6 @@ while viewer.is_running() and env.t[0] < 3.0:
 viewer.close()
 ```
 
-`WaterViewer` builds a mesh patch per env and copies the data to the host every frame, so its cost grows with the number of envs drawn. Past a few dozen, drawing costs more than the physics. The viewer's `num_envs` must equal the length of what you pass to `draw`, so slice the time, the sea and the poses to the first `shown` envs. `Sea.subset` takes a slice, a list of env ids or a tensor of ids.
-
-A good habit: simulate thousands, draw four, print summary numbers for all.
+`WaterViewer` builds a mesh patch per env and copies the data to the host every frame, so its cost grows with the number of envs drawn. With the `"null"` viewer on a laptop CPU, one frame took 3.7 ms for 4 drawn envs and 48 ms for 64, against 183 ms for one physics step of 64 envs. A real window adds rendering on top, and with the physics on a GPU, drawing can cost more than the physics. The viewer's `num_envs` must equal the length of what you pass to `draw`, so slice the time, the sea and the poses to the first `shown` envs. `Sea.subset` takes a slice, a list of env ids or a tensor of ids.
 
 Back to the [index](README.md).

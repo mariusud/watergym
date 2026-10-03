@@ -24,6 +24,8 @@ FLIP = torch.tensor([1.0, -1.0, -1.0])
 SEA_COLOR = (0.15, 0.45, 0.65)
 HULL_COLOR = (0.92, 0.9, 0.85)
 FORCE_COLOR = (1.0, 0.45, 0.1)
+# Roughness, metallic, checker, texture on: the texture carries the mesh's part colours.
+VESSEL_MATERIAL = (0.5, 0.0, 0.0, 1.0)
 
 
 def make_viewer(kind: str = "gl", headless: bool = False, width: int = 1280, height: int = 720):
@@ -59,6 +61,17 @@ def quaternion_xyzw(rotation: Tensor) -> Tensor:
         m[:, 1, 0] - m[:, 0, 1]
     )
     return torch.nn.functional.normalize(torch.stack((x, y, z, w), dim=-1), dim=-1)
+
+
+def palette_texture(colors: Tensor) -> tuple[np.ndarray, Tensor]:
+    """One texel per distinct vertex colour [1, N, 3] and each vertex's uv [V, 2] at the
+    centre of its texel. A part's uv is constant, so the texture is never blended."""
+    palette, slot = torch.unique(colors, dim=0, return_inverse=True)
+    uvs = torch.stack(
+        ((slot + 0.5) / len(palette), torch.full_like(slot, 0.5, dtype=torch.float)), -1
+    )
+    texels = (palette[None] * 255).round().to(torch.uint8).numpy()
+    return texels, uvs.float()
 
 
 def vec3_array(points: Tensor) -> wp.array:
@@ -178,8 +191,14 @@ class WaterViewer:
         if vessel.name not in self.registered:
             mesh = vessel.mesh
             indices = wp.array(mesh.triangles.reshape(-1).numpy().astype(np.int32), dtype=wp.int32)
+            palette, uvs = palette_texture(mesh.colors)
             self.viewer.log_mesh(
-                vessel.name, vec3_array(to_viewer_frame(mesh.vertices)), indices, hidden=True
+                vessel.name,
+                vec3_array(to_viewer_frame(mesh.vertices)),
+                indices,
+                uvs=wp.array(uvs.numpy(), dtype=wp.vec2),
+                texture=palette,
+                hidden=True,
             )
             self.registered.add(vessel.name)
         pose = Pose.from_eta(eta)
@@ -188,13 +207,14 @@ class WaterViewer:
         position = to_viewer_frame(eta[:, :3] - followed) + self.offsets
         transforms = torch.cat((position, quaternion_xyzw(rotation)), dim=-1)
         colors = torch.tensor(HULL_COLOR).expand(self.num_envs, 3)
+        textured = torch.tensor(VESSEL_MATERIAL).expand(self.num_envs, 4)
         self.viewer.log_instances(
             f"{vessel.name}_fleet",
             vessel.name,
             wp.array(transforms.numpy().astype(np.float32), dtype=wp.transform),
             vec3_array(torch.ones(self.num_envs, 3)),
             vec3_array(colors),
-            None,
+            wp.array(textured.numpy().astype(np.float32), dtype=wp.vec4),
         )
 
     def _draw_forces(

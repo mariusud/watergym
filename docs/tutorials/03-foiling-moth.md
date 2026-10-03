@@ -1,7 +1,5 @@
 # 3. Foiling Moth
 
-You will fly an International Moth with its mechanical wand, read the loads on the foils, and break the wand on purpose.
-
 ## Fly it
 
 ```python
@@ -25,7 +23,7 @@ for step in range(500):  # 500 x 0.02 s = 10 s
         print(f"t={env.t[0]:.0f}s ride height {ride:.2f} m, speed {env.nu[0, 0]:.1f} m/s")
 ```
 
-`heading_rad=math.pi` means the waves travel toward the boat, so it flies into them. Without a controller the Moth cannot stay up, so `wand_action` plays the part of the sailor's wand. It reads the water height under the wand pivot and returns a full action.
+`heading_rad=math.pi` means the waves travel toward the boat, so it flies into them. Without a controller the International Moth cannot stay up, so `wand_action` plays the part of the sailor's wand. It reads the water height under the wand pivot and returns a full action.
 
 ## What the action means
 
@@ -60,7 +58,7 @@ for foil, load in zip(env.vessel.foils, loads):
 print("weight", env.vessel.body.mass * 9.81, "N, ventilated", env.ventilated[0].tolist())
 ```
 
-`load.force` is `[envs, strips, 3]` in the body frame (x forward, z down), so lift up is minus z. The main foil carries the whole weight (it can read above 1128 N while the boat accelerates upward), the rudder foil trims pitch with a small load, and drag shows up as negative x. The flow angle `alpha` and the `ventilated` flags come from the [foils](../concepts/05-foils.md) model. A ventilated foil has lost most of its lift.
+`load.force` is `[envs, strips, 3]` in the body frame (x forward, z down), so lift up is minus z. The main foil carries the whole weight (it read 1410 N against a weight of 1128 N here, because the boat was accelerating upward), the rudder foil trims pitch with 43 N of downforce, and drag shows up as negative x. The flow angle `alpha` and the `ventilated` flags come from the [foils](../concepts/05-foils.md) model. A ventilated foil has lost most of its lift.
 
 ## Change the sea
 
@@ -96,9 +94,13 @@ print(f"flap per wand swing at gain 1: {WAND_GEARING} rad/rad")
 for gain in (0.0, 0.3, 1.0, 2.0):
     h = fly(hs=0.0, gain=gain)
     print(f"gain {gain}: ride height after 10 s {h[-1, 0]:.2f} m")
+
+for gain in (1.0, 2.0):
+    h = fly(hs=0.3, gain=gain)
+    print(f"gain {gain} in hs 0.3: ride height min {h.min():.2f} max {h.max():.2f} m")
 ```
 
-With no gain the flap stays at zero and the boat sinks onto its hull (about 0 m). A weak wand holds a lower height, 0.33 m here. Gain 1.0 holds about 0.55 m. Gain 2.0 ends at nearly the same height in flat water but reacts harder in waves, so the height swings more. The wand is a feedback loop: lower height raises the flap angle, which adds lift.
+With no gain the flap stays at zero and the boat sinks onto its hull (-0.02 m). A weak wand holds a lower height, 0.33 m. Gain 1.0 holds 0.54 m and gain 2.0 holds 0.56 m in flat water. In the 0.3 m head seas the stronger wand swings more: gain 2.0 ranges from 0.40 to 0.69 m over the four envs, against 0.42 to 0.64 m at gain 1.0.
 
 ## Draw it
 

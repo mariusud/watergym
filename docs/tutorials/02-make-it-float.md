@@ -1,6 +1,6 @@
 # 2. Make it float
 
-You will drop a box barge into flat water, watch it settle, and check the draft against Archimedes.
+A box barge dropped into flat water should settle at the draft Archimedes predicts. Here it does.
 
 ## Build the environment
 
@@ -35,7 +35,7 @@ print([round(z, 3) for z in heave[::40]])  # one sample every 2 s
 
 `step` takes an action tensor shaped `[num_envs, num_actions]`. This vessel has no actions, so pass `None`. It returns `(obs, reward, terminated, truncated, info)`, as in Gymnasium; here we ignore them. Each `dt` of 0.05 s runs two RK4 sub-steps ([rigid body](../concepts/03-rigid-body.md)).
 
-The numbers swing around a value and converge. That value is where weight equals buoyancy.
+The first sample reads -0.994 m. The barge overshoots to 0.115 m at 2 s and settles at 0.0 by 6 s. Zero is the equilibrium the barge started at, where weight equals buoyancy.
 
 ## Compare with the analytic draft
 
@@ -49,7 +49,7 @@ simulated = env.eta[0, 2].item() + HEIGHT_M / 2  # centre depth + half height = 
 print(f"analytic draft {analytic:.3f} m, simulated {simulated:.3f} m")
 ```
 
-The bottom of the box sits `HEIGHT_M / 2` below the centre of gravity, which is the body origin. The two numbers agree to the millimetre once the motion has died out. The hull is cut into cells ([buoyancy](../concepts/04-buoyancy.md)), so a coarse grid can shift the result slightly.
+The bottom of the box sits `HEIGHT_M / 2` below the centre of gravity, which is the body origin. Both print 1.000 m; the difference is below 0.001 mm. The hull is cut into cells ([buoyancy](../concepts/04-buoyancy.md)), and each cell's wet fraction grows linearly with its depth, so a box in flat water comes out exact at any cell count. A single cell gives the same draft as the barge's 10 x 16 x 10 grid.
 
 ## Read eta and nu
 

@@ -1,5 +1,5 @@
-"""Box barges heaving and rolling in beam seas: buoyancy and Froude-Krylov forces from
-volume samples against the moving surface, nothing else.
+r"""Box barges heaving and rolling in beam seas: buoyancy and Froude-Krylov forces from
+volume samples against the moving surface, with no other terms.
 
     uv run --extra viz examples/02_floating_box.py
     uv run --extra viz examples/02_floating_box.py --headless --seconds 5 \

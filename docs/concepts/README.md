@@ -1,8 +1,6 @@
 # WaterGym concepts
 
-Short pages. Each starts with an example you can check by hand, then explains the idea and names the module that implements it.
-
-Suggested reading order:
+Each page starts with an example you can check by hand, then explains the idea and names the module that implements it.
 
 1. [Frames and state](01-frames-and-state.md): NED and body frames, the pose vector η and velocity vector ν.
 2. [Waves](02-waves.md): from a spectrum to surface height and orbital velocity.

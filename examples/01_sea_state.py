@@ -1,4 +1,4 @@
-"""Four JONSWAP seas side by side: same Hs and Tp, different random phases and spreading.
+r"""Four JONSWAP seas side by side: same Hs, Tp and spreading, different random phases.
 
     uv run --extra viz examples/01_sea_state.py
     uv run --extra viz examples/01_sea_state.py --headless --seconds 5 \

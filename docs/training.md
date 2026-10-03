@@ -8,11 +8,11 @@ PPO from [rsl_rl](https://github.com/leggedrobotics/rsl_rl) trains any `WaterEnv
 uv run --extra rl examples/train_rsl_rl.py --num-envs 1024 --iterations 300
 ```
 
-The example trains the Moth to hold its starting ride height, with the reward defined at the top of the script. Add `--device mps` or `--device cuda` for more envs.
+The example trains an International Moth to hold its starting ride height, with the reward defined at the top of the script. Add `--device mps` or `--device cuda` to run more envs.
 
 ## Checkpoints
 
-Each run writes to `logs/rsl_rl/moth/<timestamp>/`: `model_0.pt`, `model_50.pt` and so on every 50 iterations, plus the last one, and TensorBoard events.
+Each run writes to `logs/rsl_rl/moth/<timestamp>/`: `model_0.pt`, `model_50.pt`, … (one every 50 iterations) plus the last, and TensorBoard events.
 
 ```bash
 uv run --extra rl tensorboard --logdir logs/rsl_rl

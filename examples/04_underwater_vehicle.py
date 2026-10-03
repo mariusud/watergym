@@ -1,5 +1,5 @@
-"""BlueROV2s holding four depths under waves with a PD depth controller. The shallow ones
-get pushed around by orbital velocity; it fades as e^(-k z) with depth.
+r"""BlueROV2s holding four depths under waves with a PD depth controller. The shallow ones
+get pushed around by orbital velocity; the orbital velocity fades as e^(-k d) with depth d.
 
     uv run --extra viz examples/04_underwater_vehicle.py
     uv run --extra viz examples/04_underwater_vehicle.py --headless --seconds 5 \

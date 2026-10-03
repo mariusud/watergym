@@ -1,4 +1,4 @@
-"""A fleet of Moths foiling through head seas, ride height held by the mechanical wand.
+r"""International Moths foiling through head seas, ride height held by the mechanical wand.
 Orange arrows are the lift and drag on every foil strip.
 
     uv run --extra viz examples/03_moth_on_foils.py

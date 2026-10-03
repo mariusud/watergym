@@ -15,11 +15,11 @@ Water particles under the wave travel in circles of radius 1 m at the surface, o
 
 ## Surface as a sum of cosines
 
-A real sea has no single wave. It is a sum of many, each with its own amplitude, frequency, direction and random phase:
+A real sea has no single wave. The surface elevation ζ is a sum of many, each with its own amplitude, frequency, direction and random phase:
 
-    eta(x, y, t) = sum_i a_i * cos(k_i*(x*cos(d_i) + y*sin(d_i)) - w_i*t + phase_i)
+    zeta(x, y, t) = sum_i a_i * cos(k_i*(x*cos(d_i) + y*sin(d_i)) - w_i*t + phase_i)
 
-Each component obeys the **deep-water dispersion relation** `w^2 = g*k`. Long waves (small ω) travel faster. WaterGym draws N components (100 to 200 is typical) once per environment reset, then evaluates the sum at any (x, y, t) with plain trig. No fluid solver runs.
+Each component obeys the **deep-water dispersion relation** `w^2 = g*k`. Long waves (small ω) travel faster. WaterGym draws N components once per environment reset (64 by default; the tutorials use 48 and 96), then evaluates the sum at any (x, y, t) with plain trig. No fluid solver runs.
 
 ## Where the amplitudes come from
 
@@ -28,7 +28,7 @@ A **spectrum** S(ω) says how much wave energy sits at each frequency. Standard 
 - **Hs**, significant wave height: the mean of the highest third of waves, about 4*sqrt(m0), where m0 is the area under S(ω).
 - **Tp**, peak period: the period where S(ω) is largest.
 
-Spectrum formulas are in [DNV-RP-C205, Environmental conditions and environmental loads](https://www.dnv.com/energy/standards-guidelines/dnv-rp-c205-environmental-conditions-and-environmental-loads/). Slice the frequency axis into bins of width Δω and set `a_i = sqrt(2*S(w_i)*dw_i)`. Check by hand: one component with a = 1 m has variance a^2/2 = 0.5, so m0 = 0.5 and `4*sqrt(0.5)` = 2.83 m. A sea with Hs = 1.9 m has total standard deviation 0.475 m, about 0.48 m of surface noise.
+Spectrum formulas are in [DNV-RP-C205, *Environmental conditions and environmental loads*](https://www.dnv.com/energy/standards-guidelines/dnv-rp-c205-environmental-conditions-and-environmental-loads/). Slice the frequency axis into bins of width Δω and set `a_i = sqrt(2*S(w_i)*dw_i)`. Check by hand: one component with a = 1 m has variance a²/2 = 0.5, so m0 = 0.5 and `4*sqrt(0.5)` = 2.83 m. A sea with Hs = 1.9 m has total standard deviation 0.475 m.
 
 ## Orbital velocity
 
@@ -41,6 +41,6 @@ A boat moving at speed U meets a wave at a different frequency than the wave has
     w_e = w + k*U = 0.785 + 0.0629*5 = 1.10 rad/s    (period 5.7 s instead of 8 s)
     following seas: w_e = w - k*U = 0.471 rad/s       (period 13.3 s)
 
-You never compute this. The wave field is evaluated at the vessel's current position at time t, so the shift appears on its own. This is also why wave forces must not be precomputed in a vessel-fixed frame.
+You don't compute this. The wave field is evaluated at the vessel's current position at time t, so the shift appears on its own. This is also why wave forces must not be precomputed in a vessel-fixed frame.
 
 Implemented in `src/watergym/waves.py`. Next: [rigid body](03-rigid-body.md).

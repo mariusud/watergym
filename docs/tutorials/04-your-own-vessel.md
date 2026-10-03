@@ -1,10 +1,10 @@
 # 4. Your own vessel
 
-You will define a small box ROV with two thrusters, step it, and draw it. A vessel is a plain dataclass, so there is no registry or base class to touch.
+A vessel is a plain dataclass, so a new one needs no registry or base class. This page builds a 20 kg box ROV with two thrusters and holds it at 2 m depth.
 
 ## The pieces
 
-A `Vessel` needs four things: a `RigidBody` (mass and damping), `VolumeSamples` for the hull (buoyancy), a `Mesh` (drawing), and optional thrusters and foils.
+A `Vessel` needs three things: a `RigidBody` (mass and damping), `VolumeSamples` for the hull (buoyancy) and a `Mesh` (drawing). Thrusters and foils are optional.
 
 ```python
 import torch
@@ -47,7 +47,8 @@ What each part means:
 
 - `RigidBody.from_diagonals` builds the diagonal mass, inertia and added-mass matrices. Vectors are ordered surge, sway, heave, roll, pitch, yaw ([rigid body](../concepts/03-rigid-body.md)). Added mass is the water the body drags along when it accelerates.
 - `box_samples(center, size, cells)` cuts a box into cells. Each cell is a buoyancy sample. Here the cell volumes are rescaled so they add up to the real displaced volume, because a solid 0.5 x 0.4 x 0.3 m box would displace 60 litres, and an open-frame ROV displaces far less ([buoyancy](../concepts/04-buoyancy.md)).
-- The hull centre sits 4 cm above the centre of gravity (`z = -0.04`, up is negative). A body with more added mass in heave than in surge pitches up as it moves forward (the Munk moment). With the centre of buoyancy at the centre of gravity, this ROV tumbled at 0.5 m/s. A raised centre of buoyancy gives a righting moment.
+- The centre of buoyancy sits 4 cm above the centre of gravity (`z = -0.04`, up is negative).
+- A body with more added mass in heave than in surge pitches up as it moves forward (the Munk moment). With the centre of buoyancy at the centre of gravity, this ROV tumbled at 0.5 m/s. Raising the centre of buoyancy gives a righting moment.
 - `box_mesh` makes the triangles that the viewer draws. It plays no part in the physics.
 - A `Thruster` pushes along `direction` (body axes, x forward, z down) with `command * max_force_n`. `position` is relative to the centre of gravity and produces torque.
 - Thruster order sets the action order: here `action[:, 0]` is surge and `action[:, 1]` is heave, positive down.
@@ -72,7 +73,7 @@ for step in range(200):  # 10 s
         )
 ```
 
-With a slightly buoyant hull and no heave thrust, the ROV drifts upward (depth falls from 2 m) while it moves forward. Thrust balances quadratic drag, so surge speed levels off near 0.5 m/s. Add a depth hold as in `examples/04_underwater_vehicle.py`:
+With a slightly buoyant hull and no heave thrust, the ROV drifts upward (depth falls from 2 m to 1.14 m in 10 s) while it moves forward. Thrust balances quadratic drag, so surge speed levels off near 0.5 m/s. Add a depth hold as in `examples/04_underwater_vehicle.py`:
 
 ```python
 env.reset(seed=0)
@@ -84,7 +85,7 @@ for step in range(200):
 print("depth after 10 s", env.eta[:, 2].tolist())
 ```
 
-The depth settles a few centimetres short of 2 m, because the net buoyancy needs a steady thrust and this controller is only proportional. The controller reads `env.eta` and `env.nu` directly. A sign check: depth too small means `error > 0`, so `heave > 0`, which pushes down.
+The four envs end between 1.94 and 1.95 m, 5 to 6 cm short of 2 m. The net buoyancy needs a steady downward thrust, and this PD controller has no integral term to supply it without an error. The controller reads `env.eta` and `env.nu` directly. A sign check: depth too small means `error > 0`, so `heave > 0`, which pushes down.
 
 ## Draw it
 
@@ -107,7 +108,7 @@ The mesh follows `vessel.name`, so give each vessel type a unique name.
 
 ## Try this
 
-- Make a vertical thruster pair at `y = +-0.15` and watch roll appear when you drive them unevenly.
+- Make a vertical thruster pair at `y = ±0.15` and watch roll appear when you drive them unevenly.
 - Add a `Foil` to `foils=[...]` (see `src/watergym/vessels/moth_vessel.py`) for a vessel that flies. Foil flaps add entries after the thrusters in the action vector.
 - Set `free_dofs=(True, False, True, False, True, False)` to lock sway, roll and yaw to zero, as the Moth does.
 

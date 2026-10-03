@@ -131,18 +131,6 @@ def regular_wave(
     )
 
 
-def phase_angle(sea: Sea, points: Tensor, t: Tensor | float) -> Tensor:
-    """k (x cos(beta) + y sin(beta)) - omega t + phi, shaped [envs, points, components]."""
-    x, y = points[..., 0, None], points[..., 1, None]
-    k, beta = sea.wavenumber[:, None], sea.direction[:, None]
-    t = torch.as_tensor(t, dtype=points.dtype, device=points.device).reshape(-1, 1, 1)
-    return (
-        k * (x * torch.cos(beta) + y * torch.sin(beta))
-        - sea.omega[:, None] * t
-        + sea.phase[:, None]
-    )
-
-
 class Water(NamedTuple):
     """The sea at points: elevation [envs, points], velocity and acceleration [envs, points, 3]."""
 
@@ -154,18 +142,51 @@ class Water(NamedTuple):
 def water_at(sea: Sea, points: Tensor, t: Tensor | float) -> Water:
     """Elevation (positive up), deep-water Airy velocity and local acceleration d(velocity)/dt.
 
-    The phase and its cos and sin are computed once and shared. Points above the mean level
-    use the mean-level velocity and acceleration (constant extrapolation).
+    Per component, with phase theta = k (x cos(beta) + y sin(beta)) - omega t + phi and
+    decay d = e^(-k z):
+
+        elevation        a cos(theta)
+        velocity         a omega d   (cos(theta) cos(beta), cos(theta) sin(beta), -sin(theta))
+        acceleration     a omega^2 d (sin(theta) cos(beta), sin(theta) sin(beta),  cos(theta))
+
+    The [envs, points, components] work is the phase, its cos and sin, the decay, and one
+    multiply-and-sum per output. Points above the mean level use the mean-level velocity and
+    acceleration (constant extrapolation).
     """
-    theta = phase_angle(sea, points, t)
+    t = torch.as_tensor(t, dtype=points.dtype, device=points.device).reshape(-1, 1)
+    cos_beta, sin_beta = torch.cos(sea.direction), torch.sin(sea.direction)
+    k = sea.wavenumber[:, None]
+    x, y, z = points[..., 0, None], points[..., 1, None], points[..., 2, None]
+    time_phase = (sea.phase - sea.omega * t)[:, None]
+    theta = time_phase + x * (k * cos_beta[:, None]) + y * (k * sin_beta[:, None])
     cos_theta, sin_theta = torch.cos(theta), torch.sin(theta)
-    amplitude = _amplitude_at_depth(sea, points)
-    speed = sea.omega[:, None] * amplitude
-    accel = sea.omega[:, None] ** 2 * amplitude
+    decay = torch.exp(-k * z.clamp(min=0))
+    wet_cos, wet_sin = decay * cos_theta, decay * sin_theta
+
+    speed = sea.amplitude * sea.omega
+    accel = speed * sea.omega
+
+    def total(per_component: Tensor, weight: Tensor) -> Tensor:
+        return (per_component * weight[:, None]).sum(-1)
+
     return Water(
-        elevation=(sea.amplitude[:, None] * cos_theta).sum(-1),
-        velocity=_to_ned(sea, horizontal=speed * cos_theta, upward=speed * sin_theta),
-        acceleration=_to_ned(sea, horizontal=accel * sin_theta, upward=-accel * cos_theta),
+        elevation=total(cos_theta, sea.amplitude),
+        velocity=torch.stack(
+            (
+                total(wet_cos, speed * cos_beta),
+                total(wet_cos, speed * sin_beta),
+                -total(wet_sin, speed),
+            ),
+            dim=-1,
+        ),
+        acceleration=torch.stack(
+            (
+                total(wet_sin, accel * cos_beta),
+                total(wet_sin, accel * sin_beta),
+                total(wet_cos, accel),
+            ),
+            dim=-1,
+        ),
     )
 
 
@@ -182,25 +203,6 @@ def orbital_velocity(sea: Sea, points: Tensor, t: Tensor | float) -> Tensor:
 def orbital_acceleration(sea: Sea, points: Tensor, t: Tensor | float) -> Tensor:
     """Local water acceleration d(velocity)/dt in NED at points [envs, points, 3]."""
     return water_at(sea, points, t).acceleration
-
-
-def _amplitude_at_depth(sea: Sea, points: Tensor) -> Tensor:
-    """a e^(-k z) per component, z clamped to the mean level."""
-    depth = points[..., 2, None].clamp(min=0)
-    return sea.amplitude[:, None] * torch.exp(-sea.wavenumber[:, None] * depth)
-
-
-def _to_ned(sea: Sea, horizontal: Tensor, upward: Tensor) -> Tensor:
-    """Sum per-component horizontal (along the travel direction) and upward parts into NED."""
-    beta = sea.direction[:, None]
-    return torch.stack(
-        (
-            (horizontal * torch.cos(beta)).sum(-1),
-            (horizontal * torch.sin(beta)).sum(-1),
-            -upward.sum(-1),
-        ),
-        dim=-1,
-    )
 
 
 def significant_wave_height(sea: Sea) -> Tensor:

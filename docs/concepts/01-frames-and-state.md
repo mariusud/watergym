@@ -17,7 +17,7 @@ The z entry is -0.3 because NED has z pointing down. The boat's world-frame velo
 - **η = (x, y, z, φ, θ, ψ)**: position and roll, pitch, yaw, in the world frame.
 - **ν = (u, v, w, p, q, r)**: linear velocity (surge, sway, heave) and angular velocity (roll rate, pitch rate, yaw rate), in the body frame.
 
-They are related by the kinematic equation `eta_dot = J(eta) @ nu`, where J holds the rotation matrix for position and a Euler-rate matrix for the angles. This is the notation of [Fossen, Handbook of Marine Craft Hydrodynamics and Motion Control (Wiley, 2011)](https://fossen.biz/html/marineCraftModel.html). Every marine paper uses it, so reading one becomes easier once you know it.
+They are related by the kinematic equation `eta_dot = J(eta) @ nu`, where J holds the rotation matrix for position and a Euler-rate matrix for the angles. This is the notation of Fossen, [*Handbook of Marine Craft Hydrodynamics and Motion Control*, 2nd ed. (Wiley, 2021)](https://fossen.biz/html/marineCraftModel.html). Most marine control papers use it.
 
 ## Why body-frame velocity
 
