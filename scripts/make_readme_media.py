@@ -9,6 +9,8 @@ Every image is a Newton viewer frame rendered at twice its final size and downsc
 import argparse
 import math
 import multiprocessing
+import shutil
+import subprocess
 import time
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor
@@ -21,10 +23,12 @@ import warp as wp
 from PIL import Image, ImageDraw, ImageFont
 
 from watergym import SeaState, WaterEnv
+from watergym.rigid_body import Pose
 from watergym.vessel import Vessel
 from watergym.vessels import bluerov2, box_barge, moth, otter
-from watergym.vessels.moth_vessel import wand_action
+from watergym.vessels.moth_vessel import FOIL_Z, HULL_BOTTOM_Z, RUDDER_X, wand_action
 from watergym.viewer import WaterViewer, make_viewer, vec3_array
+from watergym.waves import elevation
 
 OUT = Path(__file__).resolve().parents[1] / "docs" / "images" / "readme"
 SEA_COLOR = (0.06, 0.40, 0.58)
@@ -36,6 +40,8 @@ SUPERSAMPLE = 1  # the GL viewer renders at most 1280x720; MSAA does the smoothi
 SUN = np.array([0.7, -0.3, 0.55])  # low in the north, so glints run toward a camera looking north
 FONTS = ("/System/Library/Fonts/HelveticaNeue.ttc", "/System/Library/Fonts/Helvetica.ttc")
 FONT_BOLD_INDEX = 1
+# Clearer water around the Moth, so its foils show below the surface.
+MOTH_SEA_OPACITY = 0.6
 
 
 OCEAN_CORNERS = [
@@ -54,6 +60,7 @@ def make_scene(
     spacing_m: float | None = None,
     edge_fade: float = 0.25,
     floor_color: tuple[float, float, float] = FLOOR_COLOR,
+    sea_opacity: float = 0.8,
 ) -> tuple[WaterViewer, object]:
     """A headless viewer styled for the README: one ocean from the foreground to the horizon,
     patches that taper to flat at their borders so they join into a single sea."""
@@ -73,13 +80,14 @@ def make_scene(
         spacing_m=spacing_m or patch_m,
         edge_fade=edge_fade,
         sea_color=SEA_COLOR,
-        sea_opacity=0.8,
+        sea_opacity=sea_opacity,
         sea_roughness=0.45,
     )
     renderer.spotlight_enabled = False
     renderer.specular_scale = 0.4
     renderer._sun_direction = SUN / np.linalg.norm(SUN)
     renderer.exposure = 1.4
+    log_outer_sea(viewer, scene)
     viewer.log_mesh(
         "ocean_floor",
         vec3_array(torch.tensor(OCEAN_CORNERS)),
@@ -89,6 +97,32 @@ def make_scene(
         backface_culling=False,
     )
     return scene, viewer
+
+
+def log_outer_sea(viewer, scene: WaterViewer, reach_m: float = 600.0) -> None:
+    """Flat water from the edge of the env grid out to the horizon. The patches taper to
+    flat at their borders, so the two join without a seam and no patch edge shows."""
+    half = scene.patch[:, 0].max().item()
+    x0, y0 = (scene.offsets[:, :2].min(0).values - half).tolist()
+    x1, y1 = (scene.offsets[:, :2].max(0).values + half).tolist()
+    inner = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+    outer = [[x0 - reach_m, y0 - reach_m], [x1 + reach_m, y0 - reach_m]]
+    outer += [[x1 + reach_m, y1 + reach_m], [x0 - reach_m, y1 + reach_m]]
+    corners = torch.tensor(inner + outer)
+    corners = torch.cat((corners, torch.zeros(8, 1)), -1)
+    frame = [[k, (k + 1) % 4, 4 + (k + 1) % 4, 4 + k] for k in range(4)]
+    # Wound counter-clockwise seen from above, or the shader lights it as facing down.
+    quads = np.array([[a, c, b, a, d, c] for a, b, c, d in frame], np.int32).reshape(-1)
+    viewer.log_mesh(
+        "outer_sea",
+        vec3_array(corners),
+        wp.array(quads, dtype=wp.int32),
+        normals=vec3_array(torch.tensor([[0.0, 0.0, 1.0]]).expand(8, 3)),
+        color=scene.sea_color,
+        roughness=scene.sea_roughness,
+        opacity=scene.sea_opacity,
+        backface_culling=False,
+    )
 
 
 def snapshot(viewer, size: tuple[int, int]) -> Image.Image:
@@ -126,14 +160,42 @@ def add_label(image: Image.Image, title: str, subtitle: str = "") -> None:
         )
 
 
-def moth_fleet(
-    num_envs: int, hs: float, tp: float = 3.2, seed: int = 0, warmup_s: float = 4.0
-) -> WaterEnv:
-    sea = SeaState(hs=hs, tp=tp, heading_rad=math.pi, spreading=10.0, num_components=48)
-    env = WaterEnv(moth(), num_envs, sea)
-    env.reset(seed=seed)
-    advance(env, warmup_s)
-    return env
+HERO_SIDE = 8  # an 8 x 8 grid of Moths, each in its own random sea
+HERO_PATCH_M = 8.0
+HERO_STAR = HERO_SIDE - 1  # the close-up Moth sits on the near corner, so the camera
+# pulls back over open water instead of through the fleet
+HERO_FPS = 20.0
+CLOSE_S, ZOOM_S, HOLD_S, FADE_S = 2.6, 3.6, 1.4, 0.6
+
+
+HERO_SEA = SeaState(hs=0.6, tp=2.8, heading_rad=math.pi, spreading=10.0, num_components=48)
+
+
+def foils_stay_wet(env: WaterEnv) -> bool:
+    """Every Moth has both foils under the surface and its hull bottom clear of it."""
+    points = torch.tensor([[0.0, 0.0, FOIL_Z], [RUDDER_X, 0.0, FOIL_Z], [0.0, 0.0, HULL_BOTTOM_Z]])
+    world = Pose.from_eta(env.eta).to_world(points)
+    depth = world[..., 2] + elevation(env.sea, world, env.t)
+    return bool((depth[:, :2] > 0.05).all() and (depth[:, 2] < 0.05).all())
+
+
+def hero_states(seconds: float) -> tuple[WaterEnv, list[tuple[torch.Tensor, torch.Tensor]]]:
+    """(t, eta) for every frame of a run in which no Moth crashes or launches, trying
+    seeds until one does."""
+    for seed in range(20):
+        env = WaterEnv(moth(), HERO_SIDE**2, HERO_SEA)
+        env.reset(seed=seed)
+        advance(env, 4.0)
+        states, steps_per_frame = [], round(1 / HERO_FPS / env.dt)
+        for _ in range(round(seconds * HERO_FPS)):
+            if not foils_stay_wet(env):
+                break
+            states.append((env.t.clone(), env.eta.clone()))
+            advance(env, steps_per_frame * env.dt)
+        else:
+            print(f"hero: seed {seed}")
+            return env, states
+    raise RuntimeError("no seed keeps every Moth flying")
 
 
 def advance(env: WaterEnv, seconds: float) -> None:
@@ -141,51 +203,70 @@ def advance(env: WaterEnv, seconds: float) -> None:
         env.step(wand_action(env.sea, env.t, env.eta))
 
 
-def draw_moths(scene: WaterViewer, env: WaterEnv) -> None:
-    scene.draw(env.t, env.sea, env.vessel, env.eta)
+def smoothstep(x: float) -> float:
+    x = min(max(x, 0.0), 1.0)
+    return x * x * (3 - 2 * x)
 
 
-def hero_camera(scene: WaterViewer, phase: float) -> None:
-    """A slow drift around the fleet that returns to its start at phase 1."""
-    angle = 2 * math.pi * phase
-    scene.look_at_grid(
-        distance=0.40 + 0.03 * math.sin(angle),
-        pitch_deg=-12 - 1.5 * math.sin(angle + 1),
-        yaw_deg=-33 + 12 * math.cos(angle),
-    )
+def aim(viewer, target: torch.Tensor, distance: float, pitch: float, yaw: float) -> None:
+    """Camera `distance` m from `target` (viewer frame, z up), looking along yaw, pitch."""
+    p, y = math.radians(pitch), math.radians(yaw)
+    back = torch.tensor([math.cos(p) * math.cos(y), math.cos(p) * math.sin(y), math.sin(p)])
+    viewer.set_camera(wp.vec3(*(target - distance * back).tolist()), pitch, yaw)
 
 
-def hero_frames(width: int, seconds: float, fps: float, fade_s: float = 0.9) -> list[Image.Image]:
-    height = width * 9 // 16
-    num_envs = 12
-    env = moth_fleet(num_envs, hs=0.6, tp=2.5)
-    scene, viewer = make_scene(num_envs, 8.0, 1280, 720)
-    steps_per_frame = round(1 / fps / env.dt)
-    loop_frames = round(seconds * fps)
-    fade_frames = round(fade_s * fps)
+def hero_camera(scene: WaterViewer, seconds: float) -> None:
+    """Low and ahead of one Moth, then an eased pull back and up to the whole fleet."""
+    star = scene.offsets[HERO_STAR] + torch.tensor([0.0, 0.0, 0.35])
+    fleet = scene.offsets.mean(0)
+    s = smoothstep((seconds - CLOSE_S) / ZOOM_S)
+    drift = min(seconds / CLOSE_S, 1.0)
+    target = star + s * (fleet - star)
+    distance = 5.5 * (85.0 / 5.5) ** s
+    pitch = -6 - 22 * smoothstep(2 * s)
+    aim(scene.viewer, target, distance, pitch, -160 + 10 * drift + 15 * s)
 
-    frames = []
-    for i in range(loop_frames + fade_frames):
-        hero_camera(scene, (i % loop_frames) / loop_frames)
-        draw_moths(scene, env)
-        frames.append(snapshot(viewer, (width, height)))
-        if i == loop_frames // 4:
-            snapshot(viewer, (1280, 720)).save(OUT / "hero.png", optimize=True)
-        advance(env, steps_per_frame * env.dt)
+
+def hero_frames(width: int) -> tuple[list[Image.Image], list[Image.Image]]:
+    """GIF-size frames and full 1280 x 720 frames. The clip ends by dissolving from the
+    wide shot into its own opening frames, so it loops without a jump."""
+    loop_s = CLOSE_S + ZOOM_S + HOLD_S
+    env, states = hero_states(loop_s + FADE_S)
+    scene, viewer = make_scene(HERO_SIDE**2, HERO_PATCH_M, 1280, 720, sea_opacity=MOTH_SEA_OPACITY)
+    small, full = [], []
+    for i, (t, eta) in enumerate(states):
+        hero_camera(scene, i / HERO_FPS)
+        scene.draw(t, env.sea, env.vessel, eta)
+        frame = snapshot(viewer, (1280, 720))
+        full.append(frame)
+        small.append(frame.resize((width, width * 9 // 16), Image.Resampling.LANCZOS))
+        if i == round(1.2 * HERO_FPS):
+            frame.save(OUT / "hero.png", optimize=True)
         time.sleep(0.05)
-
-    # The sim does not repeat, so the first frames dissolve in from the frames that come
-    # after the end of the loop, which makes the last frame lead straight into the first.
-    looped = frames[fade_frames:loop_frames]
-    for i in range(fade_frames):
-        blended = Image.blend(frames[loop_frames + i], frames[i], (i + 1) / (fade_frames + 1))
-        looped.insert(i, blended)
     viewer.close()
-    return looped
+    loop, fade = round(loop_s * HERO_FPS), round(FADE_S * HERO_FPS)
+    for frames in (small, full):
+        dissolve = [
+            Image.blend(frames[loop + i], frames[i], (i + 1) / (fade + 1)) for i in range(fade)
+        ]
+        frames[:] = frames[fade:loop] + dissolve
+    return small, full
 
 
-def make_hero(width: int = 800, seconds: float = 6.2, fps: float = 12.5) -> None:
-    save_gif(hero_frames(width, seconds, fps), OUT / "hero.gif", round(100 / fps))
+def make_hero(width: int = 800) -> None:
+    small, full = hero_frames(width)
+    every = 2  # the GIF runs at half the video frame rate to stay small
+    save_gif(small[::every], OUT / "hero.gif", round(100 * every / HERO_FPS))
+    if shutil.which("ffmpeg"):
+        save_mp4(full, OUT / "hero.mp4", HERO_FPS)
+
+
+def save_mp4(frames: list[Image.Image], path: Path, fps: float) -> None:
+    command = ["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24"]
+    command += ["-s", f"{frames[0].width}x{frames[0].height}", "-r", str(fps), "-i", "-"]
+    command += ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "23", "-movflags"]
+    command += ["+faststart", str(path)]
+    subprocess.run(command, input=b"".join(f.tobytes() for f in frames), check=True)
 
 
 def save_gif(frames: list[Image.Image], path: Path, delay_cs: int) -> None:
@@ -224,8 +305,9 @@ def render_panel(panel: Panel, size: tuple[int, int], seed: int = 0) -> Image.Im
     env.reset(seed=seed)
     for _ in range(round(panel.seconds / panel.dt)):
         env.step(panel.action(env))
-    scene, viewer = make_scene(1, panel.patch_m, *size, edge_fade=0.1)
-    scene.sea_opacity = panel.sea_opacity
+    scene, viewer = make_scene(
+        1, panel.patch_m, *size, edge_fade=0.1, sea_opacity=panel.sea_opacity
+    )
     scene.look_at_grid(*panel.camera)
     scene.draw(env.t, env.sea, env.vessel, env.eta)
     image = snapshot(viewer, size)
@@ -249,8 +331,9 @@ def vessel_panels() -> list[Panel]:
             moth(),
             SeaState(hs=0.5, tp=2.6, heading_rad=math.pi, spreading=10.0),
             30.0,
-            (0.46, -16, -40),
+            (0.36, -10, -40),
             action=lambda env: wand_action(env.sea, env.t, env.eta),
+            sea_opacity=MOTH_SEA_OPACITY,
         ),
         Panel(
             "Otter USV",
@@ -263,11 +346,11 @@ def vessel_panels() -> list[Panel]:
         ),
         Panel(
             "BlueROV2",
-            "Six thrusters, holding 0.5 m depth",
+            "Eight thrusters, holding 0.5 m depth",
             bluerov2(),
             SeaState(hs=0.5, tp=3.0, spreading=10.0),
             30.0,
-            (0.09, -14, -40),
+            (0.075, -13, -40),
             action=hold_depth(0.5),
             sea_opacity=0.45,
         ),
@@ -295,6 +378,7 @@ def sea_state_panels() -> list[Panel]:
             30.0,
             (0.42, -20, -50),
             action=lambda env: wand_action(env.sea, env.t, env.eta),
+            sea_opacity=MOTH_SEA_OPACITY,
         )
         for hs in names
     ]

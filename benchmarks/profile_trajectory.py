@@ -41,7 +41,7 @@ def trajectory(factory) -> tuple[torch.Tensor, torch.Tensor]:
             action = commands.expand(args.num_envs, vessel.num_actions)
         env.step(action)
         states.append(torch.cat((env.eta, env.nu), -1).double().cpu())
-        vents.append(env.ventilated.cpu())
+        vents.append(env.ventilated.cpu().clone())
     return torch.stack(states), torch.stack(vents)
 
 

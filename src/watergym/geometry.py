@@ -7,12 +7,13 @@ frame (x forward, y starboard, z down), metres.
 
 import math
 from dataclasses import dataclass
+from pathlib import Path
 
+import numpy as np
 import torch
 from torch import Tensor
 
 Vec3 = tuple[float, float, float]
-WHITE = (1.0, 1.0, 1.0)
 
 
 @dataclass
@@ -62,9 +63,7 @@ class Mesh:
         )
 
     def painted(self, color: Vec3) -> "Mesh":
-        return Mesh(
-            self.vertices, self.triangles, torch.tensor(color).expand(len(self.vertices), 3)
-        )
+        return Mesh(self.vertices, self.triangles, point(color).expand(len(self.vertices), 3))
 
 
 def merge(meshes: list[Mesh]) -> Mesh:
@@ -108,6 +107,10 @@ def box_mesh(center: Vec3, size: Vec3) -> Mesh:
     first = torch.arange(0, 24, 4)[:, None]
     triangles = torch.cat((first + torch.tensor([0, 1, 2]), first + torch.tensor([0, 2, 3])))
     return Mesh(face_vertices, triangles)
+
+
+def point(v: Vec3) -> Tensor:
+    return torch.tensor(v, dtype=torch.float)
 
 
 def skin(rings: Tensor) -> Mesh:
@@ -156,35 +159,45 @@ def loft(sections: list[tuple[float, Tensor]]) -> Mesh:
 
 
 def hull_section(
-    half_beam: float, deck_z: float, keel_z: float, fullness: float = 2.0, points: int = 13
+    half_beam: float,
+    deck_z: float,
+    keel_z: float,
+    fullness: float = 2.0,
+    deck_camber: float = 0.0,
+    points: int = 21,
 ) -> Tensor:
-    """Outline [points + 2, 2] of a hull section: a flat deck over a superellipse bottom.
+    """Outline [points + 7, 2] of a hull section: a superellipse bottom under a deck that
+    crowns up by `deck_camber` on the centreline.
 
     fullness 2 is an ellipse, below 2 the bottom turns to a V, above 2 to a box.
-    The deck corners are repeated so the sheer line shows as a crease.
+    The sheer corners are repeated so the deck edge shows as a crease.
     """
     angle = torch.linspace(0, math.pi, points)
     shape = 2 / fullness
     y = half_beam * angle.cos().sign() * angle.cos().abs() ** shape
     z = deck_z + (keel_z - deck_z) * angle.sin().abs() ** shape
     bottom = torch.stack((y, z), -1)
-    return torch.cat((bottom, bottom[[-1, 0]]))
+    across = torch.linspace(-1, 1, 7)
+    deck = torch.stack((half_beam * across, deck_z - deck_camber * (1 - across**2)), -1)
+    return torch.cat((bottom, deck))
 
 
 def rounded_rectangle(
     half_width: float, half_height: float, radius: float, center: tuple[float, float] = (0, 0)
 ) -> Tensor:
-    """Outline [16, 2] of a rectangle whose corners are quarter circles of `radius`."""
-    corners = [(1, 1), (-1, 1), (-1, -1), (1, -1)]
+    """Outline [32, 2] of a rectangle with quarter-circle corners. The ends of each corner
+    are repeated so the flat sides shade flat."""
     points = []
-    for i, (sy, sz) in enumerate(corners):
-        for angle in torch.linspace(0, math.pi / 2, 4) + i * math.pi / 2:
-            points.append(
-                (
-                    center[0] + sy * (half_width - radius) + radius * math.cos(angle),
-                    center[1] + sz * (half_height - radius) + radius * math.sin(angle),
-                )
+    for corner, (sy, sz) in enumerate([(1, 1), (-1, 1), (-1, -1), (1, -1)]):
+        angles = torch.linspace(0, math.pi / 2, 6) + corner * math.pi / 2
+        arc = [
+            (
+                center[0] + sy * (half_width - radius) + radius * math.cos(angle),
+                center[1] + sz * (half_height - radius) + radius * math.sin(angle),
             )
+            for angle in angles
+        ]
+        points += [arc[0], *arc, arc[-1]]
     return torch.tensor(points)
 
 
@@ -203,7 +216,7 @@ def perpendicular_axes(axis: Tensor) -> tuple[Tensor, Tensor]:
 
 def revolve(start: Vec3, end: Vec3, radii: Tensor, sides: int = 12) -> Mesh:
     """A body of revolution from `start` to `end` with radius radii[i] at equal steps."""
-    start_t, end_t = torch.tensor(start, dtype=torch.float), torch.tensor(end, dtype=torch.float)
+    start_t, end_t = point(start), point(end)
     axis = torch.nn.functional.normalize(end_t - start_t, dim=0)
     u, v = perpendicular_axes(axis)
     angle = torch.arange(sides) * 2 * math.pi / sides
@@ -222,13 +235,25 @@ def tube(
     )
 
 
-def pod(start: Vec3, end: Vec3, radius: float, sides: int = 12, stations: int = 9) -> Mesh:
+def pod(start: Vec3, end: Vec3, radius: float, sides: int = 12, stations: int = 13) -> Mesh:
     """A streamlined body with rounded nose and tail, for foil fuselages and thruster pods."""
     t = torch.linspace(0, 1, stations)
     return revolve(start, end, radius * (math.pi * t).sin().clamp(min=0) ** 0.5, sides)
 
 
-def naca_section(thickness_ratio: float, points: int = 10) -> Tensor:
+def ring(center: Vec3, axis: Vec3, radius: float, width: float, thickness: float) -> Mesh:
+    """A flat band around `axis`, like a propeller guard: `width` along the axis,
+    `thickness` radially, inner radius `radius`."""
+    axis_t = torch.nn.functional.normalize(point(axis), dim=0)
+    u, v = perpendicular_axes(axis_t)
+    profile = torch.tensor([[-0.5, 0.0], [0.5, 0.0], [0.5, 1.0], [-0.5, 1.0]])
+    along = point(center) + profile[:, :1] * width * axis_t
+    out = radius + profile[:, 1:] * thickness
+    angles = torch.linspace(0, 2 * math.pi, 33)
+    return skin(torch.stack([along + out * (a.cos() * u + a.sin() * v) for a in angles]))
+
+
+def naca_section(thickness_ratio: float, points: int = 14) -> Tensor:
     """NACA 00xx outline [2 * points - 1, 2] of (chord fraction from the leading edge,
     thickness / chord), running from the trailing edge over the top and back underneath.
     The two trailing-edge points are separate so the edge stays sharp."""
@@ -250,14 +275,14 @@ def foil_mesh(
     taper: float,
     position: Vec3,
     span_axis: Vec3 = (0.0, 1.0, 0.0),
-    stations: int = 9,
+    stations: int = 13,
 ) -> Mesh:
     """A NACA 00xx foil centred on `position`, chord along x, tapering linearly from the
     middle of the span to tip chord = taper * root chord at both ends. `chord` is the mean
     chord, so the area is chord * span. The quarter-chord line is straight."""
     root = 2 * chord / (1 + taper)
     section = naca_section(thickness_ratio)
-    span_dir = torch.tensor(span_axis, dtype=torch.float)
+    span_dir = point(span_axis)
     chord_dir = torch.tensor([1.0, 0.0, 0.0])
     thickness_dir = torch.linalg.cross(chord_dir, span_dir)
     rings = []
@@ -265,7 +290,7 @@ def foil_mesh(
         local_chord = root * (1 - (1 - taper) * 2 * s.abs())
         forward = root / 4 + local_chord * (0.25 - section[:, :1])
         rings.append(
-            torch.tensor(position, dtype=torch.float)
+            point(position)
             + s * span * span_dir
             + forward * chord_dir
             + local_chord * section[:, 1:] * thickness_dir
@@ -290,13 +315,14 @@ def sail(
     clew: Vec3,
     camber: float = 0.08,
     roach: float = 0.0,
-    rows: int = 14,
-    columns: int = 8,
+    head_width: float = 0.0,
+    rows: int = 20,
+    columns: int = 10,
 ) -> Mesh:
-    """A cambered sail: the luff runs tack to head, the leech head to clew bowed aft by
-    `roach`, and every horizontal section is a parabola of depth camber * chord bulging
-    to starboard."""
-    tack_t, head_t, clew_t = torch.tensor(tack), torch.tensor(head), torch.tensor(clew)
+    """A cambered sail: the luff runs tack to head, the leech from clew to `head_width`
+    aft of the head (a square top), bowed aft by `roach`. Every horizontal section is a
+    parabola of depth camber * chord bulging to starboard."""
+    tack_t, head_t, clew_t = point(tack), point(head), point(clew)
     luff_dir = torch.nn.functional.normalize(head_t - tack_t, dim=0)
     aft = clew_t - tack_t
     aft = torch.nn.functional.normalize(aft - (aft @ luff_dir) * luff_dir, dim=0)
@@ -305,7 +331,51 @@ def sail(
     height = torch.linspace(0, 1, rows)[:, None, None]
     across = torch.linspace(0, 1, columns)[None, :, None]
     luff = tack_t + height * (head_t - tack_t)
-    leech = clew_t + height * (head_t - clew_t) + roach * (math.pi * height).sin() * aft
+    peak = head_t + head_width * aft
+    leech = clew_t + height * (peak - clew_t) + roach * (math.pi * height).sin() * aft
     flat = luff + across * (leech - luff)
     chord = (leech - luff).norm(dim=-1, keepdim=True)
     return sheet(flat + 4 * camber * chord * across * (1 - across) * leeward)
+
+
+def load_mesh(
+    path: str | Path,
+    scale: float = 1.0,
+    offset: Vec3 = (0.0, 0.0, 0.0),
+    rotation: Tensor | None = None,
+    color: Vec3 = (1.0, 1.0, 1.0),
+) -> Mesh:
+    """Read an OBJ or STL (ASCII or binary) file as a Mesh: vertex = rotation @ (scale * p)
+    + offset. Vertices at the same spot are merged, so the surface shades smooth.
+    Polygons are split into triangle fans; textures and normals in the file are ignored."""
+    path = Path(path)
+    if path.suffix.lower() == ".obj":
+        vertices, faces = [], []
+        for line in path.read_text().splitlines():
+            kind, *fields = line.split() or [""]
+            if kind == "v":
+                vertices.append([float(v) for v in fields[:3]])
+            elif kind == "f":
+                corners = [int(f.split("/")[0]) for f in fields]
+                corners = [c - 1 if c > 0 else len(vertices) + c for c in corners]
+                fan = zip(corners[1:-1], corners[2:], strict=True)
+                faces += [[corners[0], b, c] for b, c in fan]
+        points, triangles = torch.tensor(vertices), torch.tensor(faces)
+    else:
+        corners = stl_triangles(path.read_bytes())
+        points, triangles = corners.reshape(-1, 3), torch.arange(len(corners) * 3).reshape(-1, 3)
+    points, merged = torch.unique(points, dim=0, return_inverse=True)
+    rotation = torch.eye(3) if rotation is None else rotation.float()
+    vertices = scale * points.float() @ rotation.T + point(offset)
+    return Mesh(vertices, merged[triangles]).painted(color)
+
+
+def stl_triangles(data: bytes) -> Tensor:
+    """Triangle corners [T, 3, 3] from the bytes of an ASCII or binary STL file."""
+    count = int(np.frombuffer(data[80:84], np.uint32)[0]) if len(data) >= 84 else 0
+    if len(data) == 84 + 50 * count:
+        record = np.dtype([("normal", "<f4", 3), ("corners", "<f4", (3, 3)), ("extra", "<u2")])
+        return torch.from_numpy(np.frombuffer(data, record, count, 84)["corners"].copy())
+    lines = data.decode().split("vertex")[1:]
+    numbers = [[float(v) for v in line.split()[:3]] for line in lines]
+    return torch.tensor(numbers).reshape(-1, 3, 3)

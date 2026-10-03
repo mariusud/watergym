@@ -13,8 +13,8 @@ import torch
 from torch import Tensor
 
 from watergym.foils import FoilLoads, update_ventilation
-from watergym.rigid_body import Pose, rk4_step
-from watergym.vessel import Vessel, all_foil_loads, vessel_derivative
+from watergym.rigid_body import Pose, kinematics, rk4_step
+from watergym.vessel import Vessel, all_foil_loads, vessel_derivative, water_around
 from watergym.waves import Sea, make_sea
 
 RewardFn = Callable[["WaterEnv"], Tensor]  # also the type of termination_fn: a bool [envs]
@@ -28,6 +28,45 @@ class SeaState:
     spreading: float | None = None
     gamma: float = 3.3
     num_components: int = 64
+
+
+def advance(
+    vessel: Vessel,
+    sea: Sea,
+    t: Tensor,
+    eta: Tensor,
+    nu: Tensor,
+    action: Tensor,
+    ventilated: Tensor,
+    wetting_time: Tensor,
+    dt: float,
+    substeps: int,
+    frozen_waves: bool,
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """The physics of one env step: `substeps` RK4 steps, then the ventilation update.
+
+    Returns the new (t, eta, nu, ventilated) and advances `wetting_time` in place. With
+    `frozen_waves` the sea is evaluated once, at mid-step (t + dt/2, at the pose the current
+    velocities reach by then), and reused by every RK4 stage. Ventilation still sees the sea
+    at the end of the step: its thresholds flip on small depth errors.
+    """
+    waters = None
+    if frozen_waves:
+        midpoint = eta + dt / 2 * kinematics(eta, nu, Pose.from_eta(eta))
+        waters = water_around(vessel, sea, t + dt / 2, Pose.from_eta(midpoint))
+    derivative = vessel_derivative(vessel, sea, action, ventilated, waters)
+    substep_dt = dt / substeps
+    for _ in range(substeps):
+        eta, nu = rk4_step(derivative, t, eta, nu, substep_dt)
+        t = t + substep_dt
+
+    loads = all_foil_loads(vessel, sea, t, Pose.from_eta(eta), nu, action, ventilated)
+    next_ventilated = ventilated.clone()
+    for i, foil in enumerate(vessel.foils):
+        next_ventilated[:, i] = update_ventilation(
+            foil, ventilated[:, i], loads[i], wetting_time[:, i], dt
+        )
+    return t, eta, nu, next_ventilated
 
 
 def no_reward(env: "WaterEnv") -> Tensor:
@@ -51,7 +90,18 @@ class WaterEnv:
         reward_fn: RewardFn = no_reward,
         termination_fn: RewardFn = never_terminate,
         device: str | torch.device = "cpu",
+        frozen_waves: bool = False,
+        compile: bool = False,
     ) -> None:
+        """`frozen_waves` and `compile` trade accuracy or start-up time for speed; both are
+        off by default. See research/16-performance.md for measurements.
+
+        frozen_waves: evaluate the sea once per step instead of at every RK4 stage. About 5x
+            faster on CPU; at hs 1 m the trajectories drift by up to a few cm over 4 s.
+        compile: run the physics of a step through torch.compile. About 4x faster on MPS
+            and on CPU below about 16 envs, slower on CPU at 64 envs and up (inductor's ARM
+            cos and sin are scalar). The first step takes about 30 s to compile.
+        """
         self.vessel = vessel.to(device)
         self.num_envs = num_envs
         self.sea_state = sea_state or SeaState()
@@ -62,6 +112,8 @@ class WaterEnv:
         self.reward_fn = reward_fn
         self.termination_fn = termination_fn
         self.device = torch.device(device)
+        self.frozen_waves = frozen_waves
+        self._advance = torch.compile(advance, dynamic=False) if compile else advance
         self.generator = torch.Generator().manual_seed(0)
 
         zeros = torch.zeros(num_envs, 6, device=self.device)
@@ -96,12 +148,19 @@ class WaterEnv:
         if action is None:
             action = torch.zeros(self.num_envs, self.vessel.num_actions)
         self.action = action.clamp(-1, 1).to(self.device)
-        derivative = vessel_derivative(self.vessel, self.sea, self.action, self.ventilated)
-        substep_dt = self.dt / self.substeps
-        for _ in range(self.substeps):
-            self.eta, self.nu = rk4_step(derivative, self.t, self.eta, self.nu, substep_dt)
-            self.t = self.t + substep_dt
-        self._update_ventilation()
+        self.t, self.eta, self.nu, self.ventilated = self._advance(
+            self.vessel,
+            self.sea,
+            self.t,
+            self.eta,
+            self.nu,
+            self.action,
+            self.ventilated,
+            self.wetting_time,
+            self.dt,
+            self.substeps,
+            self.frozen_waves,
+        )
 
         reward = self.reward_fn(self)
         tilt = self.eta[:, 3:5].abs().amax(-1)
@@ -120,13 +179,6 @@ class WaterEnv:
         return all_foil_loads(
             self.vessel, self.sea, self.t, pose, self.nu, self.action, self.ventilated
         )
-
-    def _update_ventilation(self) -> None:
-        loads = self.foil_loads()
-        for i, foil in enumerate(self.vessel.foils):
-            self.ventilated[:, i] = update_ventilation(
-                foil, self.ventilated[:, i], loads[i], self.wetting_time[:, i], self.dt
-            )
 
     def _sample_sea(self, num: int) -> Sea:
         s = self.sea_state

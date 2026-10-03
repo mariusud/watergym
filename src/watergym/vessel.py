@@ -54,6 +54,10 @@ class Vessel:
     initial_eta: Vec6 = (0.0,) * 6
     initial_nu: Vec6 = (0.0,) * 6
     density: float = WATER_DENSITY
+    free_dof_mask: Tensor = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.free_dof_mask = torch.tensor(self.free_dofs, dtype=torch.float32)
 
     @property
     def flapped_foils(self) -> list[Foil]:
@@ -64,13 +68,15 @@ class Vessel:
         return len(self.thrusters) + len(self.flapped_foils)
 
     def to(self, device: str | torch.device) -> "Vessel":
-        return replace(
+        moved = replace(
             self,
             body=self.body.to(device),
             hull=self.hull.to(device),
             foils=[foil.to(device) for foil in self.foils],
             thrusters=[thruster.to(device) for thruster in self.thrusters],
         )
+        moved.free_dof_mask = self.free_dof_mask.to(device)
+        return moved
 
 
 def gravity_force(mass: float, pose: Pose) -> Tensor:
@@ -99,6 +105,11 @@ def flap_angles(vessel: Vessel, action: Tensor) -> list[Tensor]:
 def water_around(vessel: Vessel, sea: Sea, t: Tensor, pose: Pose) -> list[Water]:
     """The sea at the hull samples, then at each foil's strips, from one evaluation."""
     point_sets = [vessel.hull.centers] + [foil.strip_centers for foil in vessel.foils]
+    return water_at_point_sets(sea, t, pose, point_sets)
+
+
+def water_at_point_sets(sea: Sea, t: Tensor, pose: Pose, point_sets: list[Tensor]) -> list[Water]:
+    """The sea at several sets of body-frame points [P_i, 3], from one evaluation."""
     water = water_at(sea, pose.to_world(torch.cat(point_sets)), t)
     sizes = [len(points) for points in point_sets]
     return [Water(*parts) for parts in zip(*(x.split(sizes, dim=1) for x in water), strict=True)]
@@ -115,9 +126,14 @@ def all_foil_loads(
     waters: list[Water] | None = None,
 ) -> list[FoilLoads]:
     """Loads on every foil; `ventilated` is [envs, num_foils] bool. `waters` is the output of
-    `water_around` if the caller has it."""
+    `water_around` if the caller has it; otherwise the sea is evaluated at the foils only."""
+    if not vessel.foils:
+        return []
     flaps = flap_angles(vessel, action)
-    foil_waters = (waters or water_around(vessel, sea, t, pose))[1:]
+    if waters is None:
+        foil_waters = water_at_point_sets(sea, t, pose, [f.strip_centers for f in vessel.foils])
+    else:
+        foil_waters = waters[1:]
     return [
         foil_loads(
             foil, sea, t, pose, nu, flaps[i], ventilated[:, i], vessel.density, foil_waters[i]
@@ -127,10 +143,19 @@ def all_foil_loads(
 
 
 def generalized_force(
-    vessel: Vessel, sea: Sea, t: Tensor, pose: Pose, nu: Tensor, action: Tensor, ventilated: Tensor
+    vessel: Vessel,
+    sea: Sea,
+    t: Tensor,
+    pose: Pose,
+    nu: Tensor,
+    action: Tensor,
+    ventilated: Tensor,
+    waters: list[Water] | None = None,
 ) -> Tensor:
-    """tau [envs, 6] in the body frame."""
-    waters = water_around(vessel, sea, t, pose)
+    """tau [envs, 6] in the body frame. `waters` (from `water_around`) skips the wave
+    evaluation, for the frozen-wave approximation."""
+    if waters is None:
+        waters = water_around(vessel, sea, t, pose)
     tau = gravity_force(vessel.body.mass, pose)
     tau = tau + hydrostatic_force(vessel.hull, sea, t, pose, vessel.density, waters[0])
     tau = tau + thrust_force(vessel.thrusters, action[:, : len(vessel.thrusters)])
@@ -140,13 +165,23 @@ def generalized_force(
     return tau
 
 
-def vessel_derivative(vessel: Vessel, sea: Sea, action: Tensor, ventilated: Tensor) -> Derivative:
-    """The right-hand side (eta_dot, nu_dot) with action and ventilation held over a step."""
-    free = torch.tensor(vessel.free_dofs, dtype=torch.float32, device=action.device)
+def vessel_derivative(
+    vessel: Vessel,
+    sea: Sea,
+    action: Tensor,
+    ventilated: Tensor,
+    waters: list[Water] | None = None,
+) -> Derivative:
+    """The right-hand side (eta_dot, nu_dot) with action and ventilation held over a step.
+
+    With `waters`, the water elevation, velocity and acceleration at the hull and foil points
+    stay frozen at those values instead of following t and the pose (an approximation).
+    """
 
     def derivative(t: Tensor, eta: Tensor, nu: Tensor) -> tuple[Tensor, Tensor]:
         pose = Pose.from_eta(eta)
-        tau = generalized_force(vessel, sea, t, pose, nu, action, ventilated)
-        return kinematics(eta, nu, pose), free * acceleration(vessel.body, nu, tau)
+        tau = generalized_force(vessel, sea, t, pose, nu, action, ventilated, waters)
+        nu_dot = vessel.free_dof_mask * acceleration(vessel.body, nu, tau)
+        return kinematics(eta, nu, pose), nu_dot
 
     return derivative

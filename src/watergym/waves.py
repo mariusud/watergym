@@ -12,6 +12,9 @@ import torch
 from torch import Tensor
 
 GRAVITY = 9.81
+# Largest [envs, points, components] tensor water_at builds: 64 MB in float32. Splitting
+# further costs speed on CPU and MPS; above it the peak memory grows with no speed gain.
+MAX_CHUNK_ELEMENTS = 2**24
 
 
 @dataclass
@@ -150,18 +153,26 @@ def water_at(sea: Sea, points: Tensor, t: Tensor | float) -> Water:
         acceleration     a omega^2 d (sin(theta) cos(beta), sin(theta) sin(beta),  cos(theta))
 
     The [envs, points, components] work is the phase, its cos and sin, the decay, and one
-    multiply-and-sum per output. Points above the mean level use the mean-level velocity and
-    acceleration (constant extrapolation).
+    multiply-and-sum per output. Those tensors set the memory use, so points are taken in
+    chunks of at most MAX_CHUNK_ELEMENTS per tensor. Points above the mean level use the
+    mean-level velocity and acceleration (constant extrapolation).
     """
+    points_per_chunk = max(1, MAX_CHUNK_ELEMENTS // sea.amplitude.numel())
+    if points.shape[-2] > points_per_chunk:
+        chunks = [water_at(sea, part, t) for part in points.split(points_per_chunk, dim=-2)]
+        return Water(*(torch.cat(parts, dim=1) for parts in zip(*chunks, strict=True)))
+
     t = torch.as_tensor(t, dtype=points.dtype, device=points.device).reshape(-1, 1)
     cos_beta, sin_beta = torch.cos(sea.direction), torch.sin(sea.direction)
     k = sea.wavenumber[:, None]
     x, y, z = points[..., 0, None], points[..., 1, None], points[..., 2, None]
     time_phase = (sea.phase - sea.omega * t)[:, None]
-    theta = time_phase + x * (k * cos_beta[:, None]) + y * (k * sin_beta[:, None])
+    theta = time_phase.addcmul(x, k * cos_beta[:, None]).addcmul_(y, k * sin_beta[:, None])
     cos_theta, sin_theta = torch.cos(theta), torch.sin(theta)
-    decay = torch.exp(-k * z.clamp(min=0))
-    wet_cos, wet_sin = decay * cos_theta, decay * sin_theta
+    del theta  # the [envs, points, components] tensors dominate memory: free them early
+    decay = (-k * z.clamp(min=0)).exp_()
+    wet_sin = sin_theta.mul_(decay)
+    wet_cos = decay.mul_(cos_theta)
 
     speed = sea.amplitude * sea.omega
     accel = speed * sea.omega

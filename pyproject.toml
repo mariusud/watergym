@@ -1,7 +1,7 @@
 [project]
 name = "watergym"
 version = "0.1.0"
-description = "GPU-batched reinforcement learning gym for vessels in waves"
+description = "A batched PyTorch simulator for vessels in waves, for reinforcement learning"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"

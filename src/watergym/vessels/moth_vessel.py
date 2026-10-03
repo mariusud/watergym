@@ -49,8 +49,10 @@ WAND_GEARING = 0.133
 HULL = (1.0, 1.0, 1.0)
 SAIL = (0.86, 0.88, 0.9)
 CARBON = (0.09, 0.09, 0.1)
-TRAMPOLINE = (0.42, 0.44, 0.46)
-FOIL = (0.09, 0.09, 0.1)
+TRAMPOLINE = (0.2, 0.21, 0.23)
+LINE = (0.3, 0.3, 0.32)
+# Foils are drawn mid grey: black carbon vanishes under the translucent sea.
+FOIL = (0.55, 0.56, 0.58)
 
 
 def flat_plate_added_mass(foil: Foil) -> float:
@@ -121,80 +123,98 @@ def moth(main_foil_incidence_deg: float = 4.0, rudder_incidence_deg: float = 0.0
 
 
 def moth_mesh(hull_size: Vec3, main_foil: Foil, rudder_foil: Foil, struts: list[Foil]) -> Mesh:
-    """White hull and sail, carbon rig and foils."""
+    """A Mach2-style Moth: narrow lofted hull with a crowned deck, swept wing racks with
+    trampolines, a 5.1 m mast with a square-top deck-sweeper sail, boom and vang, the
+    rudder gantry and tiller, the bow wand, and NACA foils on NACA struts placed exactly
+    where the physics puts them."""
     length, beam, depth = hull_size
     deck_z = HULL_BOTTOM_Z - depth
     stern_x = -length / 2
 
-    def section(u: float) -> tuple[float, torch.Tensor]:
-        """u runs 0 at the transom to 1 at the plumb bow; the keel rises at both ends."""
-        bow = max(u - 0.45, 0) / 0.55
-        stern = max(0.45 - u, 0) / 0.45
-        half_beam = beam / 2 * (1 - bow**2) * (1 - 0.4 * stern**2)
-        keel_z = HULL_BOTTOM_Z - 0.12 * bow**2 - 0.07 * stern**2
-        fullness = 2.4 - 1.0 * bow
-        outline = hull_section(half_beam, deck_z - 0.04 * bow**2, keel_z, fullness)
+    def section(u: float) -> tuple[float, Tensor]:
+        """u runs 0 at the transom to 1 at the plumb bow; V forward, U aft, rocker at
+        both ends."""
+        bow = max(u - 0.4, 0) / 0.6
+        stern = max(0.4 - u, 0) / 0.4
+        half_beam = beam / 2 * (1 - bow**1.3) * (1 - 0.35 * stern**2)
+        keel_z = HULL_BOTTOM_Z - 0.13 * bow**2 - 0.05 * stern**2
+        sheer_z = deck_z - 0.05 * bow**2
+        outline = hull_section(half_beam, sheer_z, keel_z, 2.4 - 1.1 * bow, deck_camber=0.03)
         return stern_x + u * length, outline
 
-    hull = loft([section(u) for u in torch.linspace(0, 1, 18).tolist()])
+    hull = loft([section(u) for u in torch.linspace(0, 1, 26).tolist()])
 
-    wing_root, wing_tip = beam / 2 - 0.02, 1.125
-    root_z, tip_z = deck_z - 0.02, deck_z - 0.2
-    front = ((0.35, wing_root, root_z), (0.12, wing_tip, tip_z))
-    rear = ((-0.55, wing_root, root_z), (-0.4, wing_tip, tip_z))
-    wings = []
+    rack_z, tip_z = deck_z - 0.01, deck_z - 0.17
+    wings, tramps, shrouds = [], [], []
+    mast_x, hounds_z = 0.3, -3.6
     for side in (1, -1):
-        corners = [(x, side * y, z) for x, y, z in (*front, *rear)]
+        front_root, front_tip = (0.4, side * 0.13, rack_z), (-0.3, side * 1.12, tip_z)
+        rear_root, rear_tip = (-1.0, side * 0.12, rack_z), (-0.9, side * 1.12, tip_z)
         wings += [
-            tube(corners[0], corners[1], 0.02),
-            tube(corners[2], corners[3], 0.02),
-            tube(corners[1], corners[3], 0.02),
+            tube(front_root, front_tip, 0.018),
+            tube(rear_root, rear_tip, 0.018),
+            tube(front_tip, rear_tip, 0.022),
         ]
-        tramp = torch.tensor([[corners[0], corners[1]], [corners[2], corners[3]]])
-        wings.append(sheet(tramp + torch.tensor([0.0, 0.0, 0.01])).painted(TRAMPOLINE))
+        tramp = torch.tensor([[front_root, front_tip], [rear_root, rear_tip]])
+        tramps.append(sheet(tramp + torch.tensor([0.0, 0.0, 0.012])))
+        chainplate = (0.05, side * 0.45, (rack_z + tip_z) / 2 - 0.02)
+        shrouds.append(tube((mast_x, 0.0, hounds_z), chainplate, 0.004))
 
-    mast_x = 0.3
-    mast = tube((mast_x, 0.0, deck_z), (mast_x, 0.0, -5.0), 0.03, 0.018)
-    boom = tube((mast_x, 0.0, deck_z - 0.25), (-1.95, 0.0, deck_z - 0.3), 0.022)
+    mast = tube((mast_x, 0.0, deck_z - 0.02), (mast_x, 0.0, deck_z - 5.1), 0.03, 0.017)
+    boom_z, clew_x = deck_z - 0.24, -1.85
+    boom = tube((mast_x - 0.03, 0.0, boom_z), (clew_x - 0.05, 0.0, boom_z - 0.02), 0.022)
+    vang = tube((mast_x - 0.02, 0.0, deck_z - 0.06), (mast_x - 0.55, 0.0, boom_z), 0.01)
     rig = sail(
-        (mast_x - 0.03, 0.0, deck_z - 0.12),
-        (mast_x - 0.03, 0.0, -4.9),
-        (-1.95, 0.0, deck_z - 0.32),
-        camber=0.07,
-        roach=0.35,
+        (mast_x - 0.03, 0.0, deck_z - 0.1),
+        (mast_x - 0.03, 0.0, deck_z - 5.05),
+        (clew_x, 0.0, boom_z - 0.03),
+        camber=0.08,
+        roach=0.3,
+        head_width=0.38,
     ).painted(SAIL)
 
-    gantry_end = (RUDDER_X, 0.0, deck_z + 0.02)
+    rudder_head = (RUDDER_X, 0.0, deck_z + 0.03)
     gantry = [
-        tube((stern_x + 0.15, side * 0.09, deck_z + 0.02), gantry_end, 0.018) for side in (1, -1)
+        tube((stern_x + 0.06, side * 0.085, deck_z + 0.02), rudder_head, 0.016) for side in (1, -1)
     ]
+    tiller_end = (-1.15, 0.0, deck_z - 0.07)
+    tiller = tube(rudder_head, tiller_end, 0.012)
+    extension = tube(tiller_end, (-0.75, 0.85, tip_z - 0.25), 0.007)
     wand_tip = (
         WAND_PIVOT[0] + WAND_LENGTH_M * math.cos(WAND_NEUTRAL_ANGLE),
         0.0,
         WAND_PIVOT[2] + WAND_LENGTH_M * math.sin(WAND_NEUTRAL_ANGLE),
     )
-    wand = tube(WAND_PIVOT, wand_tip, 0.008)
+    wand = tube(WAND_PIVOT, wand_tip, 0.007)
 
     main_strut, rudder_strut = struts
-    rudder_strut_top = gantry_end[2]
-    rudder_strut_length = FOIL_Z - rudder_strut_top
-    appendages = [
-        foil_mesh(main_foil.chord_m, main_foil.span_m, 0.12, 0.45, main_foil.position),
-        foil_mesh(rudder_foil.chord_m, rudder_foil.span_m, 0.12, 0.5, rudder_foil.position),
-        foil_mesh(main_strut.chord_m, main_strut.span_m, 0.1, 1.0, main_strut.position, (0, 0, 1)),
+    rudder_strut_length = FOIL_Z - rudder_head[2]
+    vertical = (0.0, 0.0, 1.0)
+    foils = [
+        foil_mesh(main_foil.chord_m, main_foil.span_m, 0.11, 0.4, main_foil.position),
+        foil_mesh(rudder_foil.chord_m, rudder_foil.span_m, 0.11, 0.45, rudder_foil.position),
+        foil_mesh(main_strut.chord_m, main_strut.span_m, 0.12, 1.0, main_strut.position, vertical),
         foil_mesh(
             rudder_strut.chord_m,
             rudder_strut_length,
-            0.1,
+            0.12,
             1.0,
-            (RUDDER_X, 0.0, rudder_strut_top + rudder_strut_length / 2),
-            (0, 0, 1),
+            (RUDDER_X, 0.0, rudder_head[2] + rudder_strut_length / 2),
+            vertical,
         ),
-        pod((0.22, 0.0, FOIL_Z), (-0.3, 0.0, FOIL_Z), 0.022),
-        pod((RUDDER_X + 0.12, 0.0, FOIL_Z), (RUDDER_X - 0.12, 0.0, FOIL_Z), 0.016),
+        pod((0.2, 0.0, FOIL_Z), (-0.32, 0.0, FOIL_Z), 0.022),
+        pod((RUDDER_X + 0.1, 0.0, FOIL_Z), (RUDDER_X - 0.12, 0.0, FOIL_Z), 0.016),
     ]
-    carbon = merge([mast, boom, *wings, *gantry, wand]).painted(CARBON)
-    return merge([hull.painted(HULL), carbon, merge(appendages).painted(FOIL), rig])
+    return merge(
+        [
+            hull.painted(HULL),
+            merge([mast, boom, vang, *wings, *gantry, tiller, wand]).painted(CARBON),
+            merge([extension, *shrouds]).painted(LINE),
+            merge(tramps).painted(TRAMPOLINE),
+            merge(foils).painted(FOIL),
+            rig,
+        ]
+    )
 
 
 def wand_flap(pivot_height_m: Tensor) -> Tensor:

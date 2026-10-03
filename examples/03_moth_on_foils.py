@@ -32,7 +32,7 @@ env = WaterEnv(moth(), args.num_envs, head_seas, device=args.device)
 env.reset(seed=0)
 
 viewer = make_viewer(args.viewer, headless=args.headless)
-scene = WaterViewer(viewer, args.num_envs, patch_size_m=8.0, patch_resolution=48)
+scene = WaterViewer(viewer, args.num_envs, patch_size_m=8.0, patch_resolution=48, sea_opacity=0.6)
 scene.look_at_grid(distance=0.9, pitch_deg=-12.0, yaw_deg=70.0)
 
 ride_heights = []
