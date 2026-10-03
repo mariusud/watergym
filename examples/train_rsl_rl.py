@@ -2,7 +2,7 @@
 
 uv run --extra rl examples/train_rsl_rl.py --num-envs 1024 --iterations 300
 uv run --extra rl --extra viz examples/train_rsl_rl.py --play logs/rsl_rl/moth/<run>/model_299.pt
-uv run --extra rl --extra viz examples/train_rsl_rl.py --play <checkpoint> --viewer null --seconds 20
+uv run --extra rl --extra viz examples/train_rsl_rl.py --play <ckpt> --viewer null
 """
 
 import argparse

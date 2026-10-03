@@ -4,7 +4,9 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A batched PyTorch gym for vessels in waves: hydrofoils, boats, USVs and underwater vehicles, on CPU, Apple MPS or CUDA.
+A batched PyTorch gym for vessels in waves: hydrofoils, boats, USVs (uncrewed surface vessels) and ROVs (remotely operated underwater vehicles), on CPU, Apple MPS or CUDA. It is legged_gym for vessels: thousands of vessels stepped in parallel, each in its own random sea, with a task, a reward and PPO on top.
+
+No marine background is assumed. Each term is defined where it first appears and explained in [docs/concepts](docs/concepts/README.md).
 
 <p align="center">
   <img src="docs/images/readme/hero.gif" alt="A grid of International Moths foiling through head seas, each in its own random sea" width="100%">
@@ -17,11 +19,13 @@ git clone https://github.com/mariusud/watergym && cd watergym
 uv run --extra viz examples/03_moth_on_foils.py
 ```
 
-`uv run` installs everything on first use, then opens a window with four Moths flying into 0.3 m waves. No display? Add `--headless --screenshot out.png`, or `--viewer null` to run the physics without drawing. Without the `viz` extra, `uv sync` installs only numpy and torch.
+The first run downloads torch, warp and newton, a few hundred MB. Then a window opens with four International Moths (foiling dinghies that ride on underwater wings) flying into head seas, waves that come at the bow, with a significant wave height Hs of 0.3 m. No display? Add `--viewer null` to run the physics without drawing. It prints a one-line summary when it ends, for example `5.0 sim s, mean hull bottom above mean water 0.53 m, 545 env-steps/s` with `--seconds 5`. `--headless --screenshot out.png` saves a frame without a window but still uses OpenGL. Without the `viz` extra, `uv sync` installs only numpy and torch.
 
 [Try it in Colab](https://colab.research.google.com/github/mariusud/watergym/blob/main/notebooks/quickstart.ipynb) with no install. The notebook is [notebooks/quickstart.ipynb](notebooks/quickstart.ipynb).
 
 ## Using it
+
+The code below is [examples/00_hello.py](examples/00_hello.py). It needs no window and no extras:
 
 ```python
 import math
@@ -50,11 +54,23 @@ for _ in range(250):  # 5 s at dt = 0.02 s
 print(obs.shape, f"mean reward {reward.mean():.2f}")
 ```
 
+```bash
+uv run examples/00_hello.py
+```
+
+Expected output:
+
 ```
 torch.Size([64, 12]) mean reward 0.61
 ```
 
-Every tensor is shaped `[num_envs, ...]`. `obs` is `[eta, nu]`, the NED pose and body velocity, and each env draws its own sea. Envs that capsize or time out reset inside `step()`, and their last observation is in `info["final_obs"]`. `wand_action` is the Moth's mechanical ride-height controller, standing in for a policy here.
+Every tensor is shaped `[num_envs, ...]`, and each env draws its own sea. Envs that capsize or time out reset inside `step()`, and their last observation is in `info["final_obs"]`. Terms in the code:
+
+- **Hs and Tp.** Significant wave height, the mean of the highest third of waves, and peak period, the period of the most energetic waves ([waves](docs/concepts/02-waves.md)).
+- **Head and beam seas.** Head seas come at the bow, and `heading_rad=math.pi` sets that. Beam seas hit the side (`math.pi / 2`) ([waves](docs/concepts/02-waves.md)).
+- **NED, eta and nu.** North-east-down axes, so z points down and a hull 0.6 m above the water has z = -0.6. `eta` is position plus roll, pitch and yaw in the world frame. `nu` is velocity in the body frame. `obs` is `[eta, nu]` ([frames](docs/concepts/01-frames-and-state.md)).
+- **The wand.** A rod that trails on the water ahead of the Moth's bow. A low hull pushes it back, which raises the flap and the lift. `wand_action` is that mechanical ride-height controller, standing in for a policy here ([foils](docs/concepts/05-foils.md)).
+- **Ventilation.** Air drawn down onto a foil, which makes its lift collapse until the angle of attack falls back and the flow reattaches ([foils](docs/concepts/05-foils.md)).
 
 A vessel is a dataclass: a `RigidBody` (mass, inertia, added mass, damping), hull volume samples for buoyancy, a mesh for drawing, and optional `Foil`s and `Thruster`s. The four in `watergym/vessels/` are written out in full, so copy one to start a new vessel.
 
@@ -62,7 +78,7 @@ A vessel is a dataclass: a `RigidBody` (mass, inertia, added mass, damping), hul
 
 Legged robots have legged_gym and rsl_rl: thousands of robots stepped in parallel, a task with a reward, and PPO on top. Vessels in waves have no equivalent. [MarineGym](https://github.com/Marine-RL/MarineGym) ([arXiv:2503.09203](https://arxiv.org/abs/2503.09203)) batches underwater vehicles on the GPU but has no free surface. [VRX](https://github.com/osrf/vrx) and [Stonefish](https://github.com/patrykcieslak/stonefish) model waves but are built around one CPU simulation at a time.
 
-WaterGym is a start on that missing piece. Each vessel gets its own irregular sea, the physics is plain PyTorch tensors, the API follows Gymnasium's vector envs, and an adapter plugs it into rsl_rl. On 2 CPU threads of an Apple M4 Pro, 1024 Moths step at about 8,000 env-steps per second, 166 times real time.
+WaterGym is a start on that missing piece. Each vessel gets its own irregular sea, the physics is plain PyTorch tensors, the API follows Gymnasium's vector envs, and an adapter plugs it into rsl_rl. `OMP_NUM_THREADS=2 uv run benchmarks/speed.py` times 1024 Moths flown by the wand: on 2 CPU threads of an Apple M4 Pro it measured 7,200 to 7,600 env-steps per second (three runs, with `nice -n 19` and other work on the machine). With dt = 0.02 s that is a real-time factor of env-steps/s x dt, 144 to 153.
 
 It is for RL researchers who want a disturbance-rejection benchmark beyond terrain, and for marine control engineers who want to test learned controllers against PID and the wand on the same seas. It is young: version 0.1, one benchmark task, and the simplifications listed below.
 
@@ -89,7 +105,7 @@ All four import from `watergym.vessels`, one file each in `src/watergym/vessels/
 
 Legged RL got harder when terrain did. Here the knob is the sea: every task runs over a grid of significant wave height Hs, peak period Tp and heading, and a score is a set of curves against sea state, never a single number.
 
-The first task is **RideControl-Moth-v0**. A policy moves the main-foil flap to hold the hull 0.6 m above the mean water level, seeing only what a real foiler can measure: bow height, pitch, pitch rate, heave acceleration, speed and its last command. The quick sweep runs in about 30 s on a laptop CPU:
+The first task is **RideControl-Moth-v0**. A policy moves the main-foil flap to hold the hull 0.6 m above the mean water level, seeing only what a real foiler can measure: bow height, pitch, pitch rate, heave acceleration, speed and its last command. The quick sweep runs in about 30 s on a laptop CPU. It prints one line of metrics per sea state and policy, and writes [benchmarks/results/ride_control.csv](benchmarks/results/ride_control.csv) and a plot, `docs/images/benchmark_ride_control.png`:
 
 ```bash
 OMP_NUM_THREADS=2 uv run --with matplotlib python benchmarks/ride_control_sweep.py --quick
@@ -115,7 +131,7 @@ uv run --extra rl examples/train_rsl_rl.py --num-envs 1024 --iterations 300
 uv run --extra rl --extra viz examples/train_rsl_rl.py --play logs/rsl_rl/moth/<run>/model_299.pt
 ```
 
-The example trains the Moth to hold its starting ride height and writes checkpoints and TensorBoard logs to `logs/rsl_rl/moth/`. Add `--device mps` or `--device cuda` for more envs. `RslRlVecEnv(env)` wraps any `WaterEnv`; how terminations map to rsl_rl's time-outs is in [docs/training.md](docs/training.md).
+The example trains the Moth to hold its starting ride height and writes checkpoints and TensorBoard logs to `logs/rsl_rl/moth/`. `model_299.pt` exists only after the 300 iterations finish; a checkpoint is also saved every 50 iterations, so `model_50.pt` appears earlier. In the printed training table, look for the mean reward rising over the iterations. To check a checkpoint without a window, add `--viewer null`: it runs `--seconds 20` (the default) of sim time and prints the mean episode reward, the ride-height RMS in metres and the number of crashes. Without `--viewer null`, `--play` opens the same view as the other examples. Add `--device mps` or `--device cuda` for more envs. `RslRlVecEnv(env)` wraps any `WaterEnv`; how terminations map to rsl_rl's time-outs is in [docs/training.md](docs/training.md).
 
 ## Examples and the viewer
 
@@ -124,7 +140,7 @@ The example trains the Moth to hold its starting ride height and writes checkpoi
 | ![sea](docs/images/01_sea_state.png) `01_sea_state.py`: four JONSWAP seas with Hs 1.5 m and Tp 4.5 s, each with its own random phases | ![barge](docs/images/02_floating_box.png) `02_floating_box.py`: 10 m box barges heaving and rolling in beam seas |
 | ![moth](docs/images/03_moth_on_foils.png) `03_moth_on_foils.py`: International Moths foiling through head seas, flap set by the mechanical wand, lift and drag arrows per foil strip | ![rov](docs/images/04_underwater_vehicle.png) `04_underwater_vehicle.py`: BlueROV2s holding 0.5, 1, 2 and 4 m depth under waves |
 
-Each example is one script you read top to bottom. Drawing uses [Newton](https://github.com/newton-physics/newton)'s viewer from the `viz` extra: one grid cell per env, the sea patch follows its vessel, and orange arrows show the force on every foil strip. `--viewer gl` opens a window, `viser` serves a browser view, `usd` records a file and `null` draws nothing. Every example also takes `--headless --screenshot out.png`, and `--device mps` or `--device cuda` where it has a `--device` flag.
+Each example is one script you read top to bottom. Drawing uses [Newton](https://github.com/newton-physics/newton)'s viewer from the `viz` extra: one grid cell per env, the sea patch follows its vessel, and orange arrows show the force on every foil strip. `--viewer gl` opens a window, `viser` serves a browser view, `usd` records a file and `null` draws nothing. Examples 01 to 04 take `--headless --screenshot out.png`, which saves a frame without a window but still renders with OpenGL, so it needs a working GPU driver. `--device mps` or `--device cuda` works on 02, 03 and `train_rsl_rl.py`, the scripts with a `--device` flag.
 
 ## Learning path
 
@@ -136,7 +152,7 @@ Each example is one script you read top to bottom. Drawing uses [Newton](https:/
 4. [Your own vessel](docs/tutorials/04-your-own-vessel.md): define a box ROV from scratch.
 5. [Batching and devices](docs/tutorials/05-batching-and-devices.md): `num_envs`, seeds, CPU, MPS and CUDA.
 
-**Concepts.** Frames, waves, rigid-body equations, buoyancy, foils and batching, in [docs/concepts](docs/concepts/README.md). Each page starts with an example you can check by hand. No marine background is assumed.
+**Concepts.** Frames, waves, rigid-body equations, buoyancy, foils and batching, in [docs/concepts](docs/concepts/README.md). Each page starts with an example you can check by hand.
 
 ## How it fits together
 

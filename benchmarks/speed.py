@@ -39,5 +39,7 @@ if env.device.type == "cuda":
 wall = time.perf_counter() - start
 
 env_steps_per_s = args.steps * args.num_envs / wall
-print(f"{args.num_envs} Moths, wand policy, device {args.device}, torch threads {torch.get_num_threads()}")
-print(f"{env_steps_per_s:.0f} env-steps/s, dt {env.dt} s, real-time factor {env_steps_per_s * env.dt:.0f}")
+threads = torch.get_num_threads()
+print(f"{args.num_envs} Moths, wand policy, device {args.device}, torch threads {threads}")
+rtf = env_steps_per_s * env.dt
+print(f"{env_steps_per_s:.0f} env-steps/s, dt {env.dt} s, real-time factor {rtf:.0f}")
