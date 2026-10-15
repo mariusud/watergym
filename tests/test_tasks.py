@@ -6,6 +6,7 @@ import torch
 from watergym.tasks import TASKS, make, ride_control
 from watergym.tasks.metrics import analog_gain, per_minute, rms, wk_analog_sections, wk_filter
 from watergym.tasks.ride_control import TASK_ID, sea_state, wand_policy, zero_policy
+from watergym.vessels import moth, moth_vessel
 from watergym.vessels.moth_vessel import wand_action
 
 # ISO 2631-1:1997 Table 3, Wk weighting factors (x1000) at one-third-octave frequencies.
@@ -18,7 +19,11 @@ ISO_WK_TABLE = {
     4.0: 967,
     5.0: 1039,
     8.0: 1036,
+    10.0: 988,
+    12.5: 902,
     16.0: 768,
+    20.0: 636,
+    25.0: 513,
     31.5: 405,
 }
 
@@ -39,11 +44,14 @@ def test_wk_analog_weighting_matches_the_iso_table(frequency: float) -> None:
     assert analog_gain(wk_analog_sections(), frequency) == pytest.approx(expected, rel=0.01)
 
 
-@pytest.mark.parametrize("frequency", [0.5, 1.0, 2.0, 4.0, 8.0])
-def test_wk_filter_weights_a_sine_like_the_iso_table(frequency: float) -> None:
+@pytest.mark.parametrize("frequency", [0.5, 1.0, 2.0, 4.0, 8.0, 10.0, 12.5, 16.0, 20.0, 25.0])
+def test_wk_filter_weights_a_sinusoid_like_the_iso_table_up_to_nyquist(frequency: float) -> None:
+    """At 50 Hz sampling, up to the 25 Hz Nyquist frequency. A cosine, since a sine sampled
+    at Nyquist is zero. The first and last 10 s hold the start and stop transients."""
     t = torch.arange(0, 60, 0.02)[:, None]
-    weighted = wk_filter(torch.sin(2 * math.pi * frequency * t), sample_rate=50.0)
-    gain = rms(weighted[1000:]) * math.sqrt(2)
+    signal = torch.cos(2 * math.pi * frequency * t)
+    weighted = wk_filter(signal, sample_rate=50.0)
+    gain = rms(weighted[500:-500]) / rms(signal[500:-500])
     assert gain == pytest.approx(ISO_WK_TABLE[frequency] / 1000, rel=0.03)
 
 
@@ -81,14 +89,43 @@ def test_wand_flies_and_zero_flap_touches_down() -> None:
     assert any(s["touchdown"].any() for s in zero)
 
 
+def test_signals_survive_the_reset_of_a_crashed_env() -> None:
+    """A reset clears env.ventilated in place; the step's signals must keep their values."""
+    task = make(TASK_ID, 2, sea_state(0.0, 3.0))
+    task.reset(seed=0)
+    _, _, _, _, info = task.step(torch.zeros(2, 1))
+    signals = {k: v.clone() for k, v in info["signals"].items()}
+    task.env.ventilated[:] = True
+    task.env._reset_envs(torch.arange(2))
+    for name, value in signals.items():
+        assert torch.equal(info["signals"][name], value), name
+
+
 def test_evaluation_is_deterministic_for_a_seed() -> None:
     first, second = (run(wand_policy, 50, hs=0.4, seed=7) for _ in range(2))
     assert torch.equal(first[-1]["height_error_m"], second[-1]["height_error_m"])
 
 
-def test_v0_definition_is_frozen() -> None:
-    """Changing any of these changes RideControl-Moth-v0. Make RideControl-Moth-v1 instead."""
-    assert set(TASKS) == {"RideControl-Moth-v0"}
+def test_heave_accel_is_the_derivative_of_the_heave_rate() -> None:
+    """With the flap held, the observed acceleration matches a central difference of the
+    world vertical velocity: gravity is removed and the frame is right."""
+    task = make(TASK_ID, 2, sea_state(0.3, 3.0))
+    obs, _ = task.reset(seed=3)
+    rates, accels = [], []
+    for _ in range(60):
+        obs, *_ = task.step(torch.full((2, 1), 0.2))
+        rates.append(task.heave_rate.clone())
+        accels.append(obs[:, 3])
+    rates, accels = torch.stack(rates), torch.stack(accels)
+    central = (rates[2:] - rates[:-2]) / (2 * ride_control.DT)
+    assert torch.allclose(accels[1:-1], central, atol=0.1)
+    assert accels.abs().max() > 2.0
+
+
+def test_v1_definition_is_frozen() -> None:
+    """Changing any of these changes RideControl-Moth-v1. Make RideControl-Moth-v2 instead."""
+    assert TASKS["RideControl-Moth-v1"] is ride_control.RideControlMoth
+    main_foil = moth().foils[0]
     frozen = (
         ride_control.DT,
         ride_control.EPISODE_LENGTH_S,
@@ -106,6 +143,11 @@ def test_v0_definition_is_frozen() -> None:
         ride_control.W_CRASH,
         ride_control.POLICY_OBSERVATIONS,
         len(ride_control.PRIVILEGED_OBSERVATIONS),
+        # The Moth the task flies.
+        main_foil.position,
+        round(math.degrees(main_foil.incidence), 6),
+        moth().thrusters[0].position,
+        (moth_vessel.WAND_GEARING, moth_vessel.WAND_NEUTRAL_ANGLE, moth_vessel.WAND_PIVOT),
     )
     assert frozen == (
         0.02,
@@ -120,7 +162,7 @@ def test_v0_definition_is_frozen() -> None:
         (0.5, math.radians(2)),
         0.05,
         0.5,
-        0.01,
+        0.005,
         20.0,
         (
             "bow_height_m",
@@ -131,4 +173,8 @@ def test_v0_definition_is_frozen() -> None:
             "last_flap",
         ),
         16,
+        (0.45, 0.0, 1.25),
+        3.2,
+        (-0.4, 0.0, -2.0),
+        (0.133, math.radians(45), (1.5, 0.0, 0.1)),
     )

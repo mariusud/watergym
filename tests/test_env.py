@@ -60,7 +60,10 @@ def test_vessel_module_constants_are_reachable_beside_the_factory() -> None:
 
 
 def test_ventilated_foils_rewet_after_the_washout_time() -> None:
-    env = WaterEnv(moth(), num_envs=1, sea_state=SeaState(hs=0.0, tp=5.0))
+    # Zero incidence keeps the main foil under the 4 deg washout angle while the boat sinks
+    # onto its hull; at the 3.2 deg default the sinking pushes it past 4 deg.
+    vessel = moth(main_foil_incidence_deg=0.0)
+    env = WaterEnv(vessel, num_envs=1, sea_state=SeaState(hs=0.0, tp=5.0))
     env.reset(seed=0)
     for _ in range(100):
         env.step(None)

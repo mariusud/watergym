@@ -58,7 +58,7 @@ for foil, load in zip(env.vessel.foils, loads):
 print("weight", env.vessel.body.mass * 9.81, "N, ventilated", env.ventilated[0].tolist())
 ```
 
-`load.force` is `[num_envs, strips, 3]` in the body frame (x forward, z down), so lift up is minus z. The main foil carries the whole weight (it read 1410 N against a weight of 1128 N here, because the boat was accelerating upward), the rudder foil trims pitch with 43 N of downforce, and drag shows up as negative x. The flow angle `alpha` and the `ventilated` flags come from the [foils](../concepts/05-foils.md) model. A ventilated foil has lost most of its lift.
+`load.force` is `[num_envs, strips, 3]` in the body frame (x forward, z down), so lift up is minus z. The main foil carries most of the weight (it read 1215 N here), and the rudder foil adds 100 N of lift behind it to balance the sail's bow-down moment. Together they exceed the 1128 N weight because the boat was accelerating upward in the waves. In calm water at trim the rudder foil lifts about 54 N. Drag shows up as negative x. The flow angle `alpha` and the `ventilated` flags come from the [foils](../concepts/05-foils.md) model. A ventilated foil has lost most of its lift.
 
 ## Change the sea
 
@@ -100,7 +100,7 @@ for gain in (1.0, 2.0):
     print(f"gain {gain} in hs 0.3: ride height min {h.min():.2f} max {h.max():.2f} m")
 ```
 
-With no gain the flap stays at zero and the boat sinks onto its hull (-0.02 m). A weak wand holds a lower height, 0.33 m. Gain 1.0 holds 0.54 m and gain 2.0 holds 0.56 m in flat water. In the 0.3 m head seas the stronger wand swings more: gain 2.0 ranges from 0.40 to 0.69 m over the four envs, against 0.42 to 0.64 m at gain 1.0.
+With no gain the flap stays at zero and the boat sinks onto its hull (-0.03 m). A weak wand holds a lower height, 0.46 m. Gain 1.0 and gain 2.0 both hold 0.55 m in flat water. In the 0.3 m head seas the stronger wand swings more: gain 2.0 ranges from 0.40 to 0.68 m over the four envs, against 0.41 to 0.64 m at gain 1.0.
 
 ## Draw it
 

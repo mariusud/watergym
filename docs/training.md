@@ -13,7 +13,7 @@ The example trains an International Moth to hold its starting ride height, with 
 ## Train on the benchmark task
 
 ```bash
-uv run --extra rl examples/train_rsl_rl.py --task RideControl-Moth-v0 --hs 0.3 --num-envs 1024 --iterations 300
+uv run --extra rl examples/train_rsl_rl.py --task RideControl-Moth-v1 --hs 0.3 --num-envs 1024 --iterations 300
 ```
 
 With `--task` the reward, terminations and 20 s timeout are the task's (see [benchmark.md](benchmark.md)). The policy reads the six sensor observations; the critic reads the 16 privileged ones, which add the true ride height, the foil depth, ventilation and the sea state. `--hs` and `--tp` set the head sea every env trains in, and `--seed` (default 0) seeds the waves and the network. The task's evaluation seeds are refused.
@@ -21,7 +21,7 @@ With `--task` the reward, terminations and 20 s timeout are the task's (see [ben
 Score a checkpoint on the benchmark grid next to the wand and zero baselines. A policy name ending in `.pt` loads the actor of an rsl_rl checkpoint:
 
 ```bash
-uv run --extra rl --with matplotlib python benchmarks/ride_control_sweep.py --quick --policy wand zero logs/rsl_rl/RideControl-Moth-v0/<timestamp>/model_299.pt
+uv run --extra rl --with matplotlib python benchmarks/ride_control_sweep.py --quick --policy wand zero logs/rsl_rl/RideControl-Moth-v1/<timestamp>/model_299.pt
 ```
 
 ## Checkpoints

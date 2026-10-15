@@ -1,4 +1,4 @@
-"""Evaluate policies on RideControl-Moth-v0 over a grid of sea states.
+"""Evaluate policies on RideControl-Moth-v1 over a grid of sea states.
 
     OMP_NUM_THREADS=2 uv run --with matplotlib python benchmarks/ride_control_sweep.py --quick
 

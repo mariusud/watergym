@@ -3,6 +3,11 @@ The sailor's roll balance is not modelled. Wand geometry, gearing, sailor mass a
 are estimates.
 
 Body origin is the CG of boat plus sailor, placed 0.25 m above the hull bottom.
+
+Pitch trim comes from where the loads act. The sail drives at its centre of effort, about 2 m
+above the CG, so its drive is a bow-down moment. The main foil sits ahead of the CG and its
+lift balances that moment, leaving the rudder foil a small share of the weight. The foils'
+heave added mass acts at the foils, so it couples heave and pitch.
 """
 
 import math
@@ -37,6 +42,12 @@ FOIL_Z = HULL_BOTTOM_Z + STRUT_LENGTH_M
 MAIN_FOIL_SPAN_M, MAIN_FOIL_CHORD_M = 0.988, 0.095
 RUDDER_FOIL_SPAN_M, RUDDER_FOIL_CHORD_M = 0.65, 0.12
 RUDDER_X = -2.3
+# The main foil's distance ahead of the CG. Sailor position sets it on a real Moth; this value
+# is chosen so the rudder foil carries about 5 % of the weight at the wand's trim.
+MAIN_FOIL_X = 0.45
+# About the centroid of the sail plan drawn in moth_mesh (tack, head and clew), raised a
+# little for the square top. Body frame, so -2.0 is 2 m above the CG.
+SAIL_CENTRE_OF_EFFORT = (-0.4, 0.0, -2.0)
 FLAP_RANGE = math.radians(6)
 # Thin-airfoil flap effectiveness for a 35 % chord plain flap (Abbott and von Doenhoff).
 FLAP_EFFECTIVENESS = 0.7
@@ -60,10 +71,23 @@ def flat_plate_added_mass(foil: Foil) -> float:
     return WATER_DENSITY * math.pi * (foil.chord_m / 2) ** 2 * foil.span_m
 
 
-def moth(main_foil_incidence_deg: float = 4.0, rudder_incidence_deg: float = 0.0) -> Vessel:
+def foil_added_mass(foils: list[Foil]) -> Tensor:
+    """Added-mass matrix [6, 6] of foils that each drag water along in heave at their own
+    position. A plate at x sees the heave velocity w - x q, so its kinetic energy
+    a (w - x q)^2 / 2 gives A33 = a, A35 = A53 = -a x and A55 = a x^2."""
+    added = torch.zeros(6, 6)
+    for foil in foils:
+        heave_at_foil = torch.tensor([0.0, 0.0, 1.0, 0.0, -foil.position[0], 0.0])
+        added += flat_plate_added_mass(foil) * torch.outer(heave_at_foil, heave_at_foil)
+    return added
+
+
+def moth(main_foil_incidence_deg: float = 3.2, rudder_incidence_deg: float = 0.0) -> Vessel:
+    """The main foil's 3.2 deg incidence puts the flap near zero when the wand trims in calm
+    water: 0.545 m ride height, 8.4 m/s, 0.26 deg bow up, the rudder foil lifting 54 N."""
     main_foil = Foil(
         "main_foil",
-        position=(0.0, 0.0, FOIL_Z),
+        position=(MAIN_FOIL_X, 0.0, FOIL_Z),
         span_m=MAIN_FOIL_SPAN_M,
         chord_m=MAIN_FOIL_CHORD_M,
         incidence=math.radians(main_foil_incidence_deg),
@@ -84,22 +108,15 @@ def moth(main_foil_incidence_deg: float = 4.0, rudder_incidence_deg: float = 0.0
         Foil(
             name, (x, 0.0, strut_center_z), STRUT_LENGTH_M, STRUT_CHORD_M, span_axis=(0.0, 0.0, 1.0)
         )
-        for name, x in (("main_strut", 0.0), ("rudder_strut", RUDDER_X))
+        for name, x in (("main_strut", MAIN_FOIL_X), ("rudder_strut", RUDDER_X))
     ]
 
-    body = RigidBody.from_diagonals(
+    body = RigidBody(
         MASS_KG,
-        inertia=[81.0, 81.0, 81.0],
-        added_mass=[
-            0.0,
-            0.0,
-            flat_plate_added_mass(main_foil) + flat_plate_added_mass(rudder_foil),
-            0.0,
-            flat_plate_added_mass(rudder_foil) * RUDDER_X**2,
-            0.0,
-        ],
-        linear_damping=[0.0] * 6,
-        quadratic_damping=[0.5, 0.0, 0.0, 0.0, 0.0, 0.0],
+        inertia=torch.diag(torch.tensor([81.0, 81.0, 81.0])),
+        added_mass=foil_added_mass([main_foil, rudder_foil]),
+        linear_damping=torch.zeros(6),
+        quadratic_damping=torch.tensor([0.5, 0.0, 0.0, 0.0, 0.0, 0.0]),
     )
 
     hull_size = (3.355, 0.30, 0.35)
@@ -114,7 +131,7 @@ def moth(main_foil_incidence_deg: float = 4.0, rudder_incidence_deg: float = 0.0
         mesh=mesh,
         foils=[main_foil, rudder_foil, *struts],
         thrusters=[
-            Thruster(position=(0.0, 0.0, 0.0), direction=(1.0, 0.0, 0.0), max_force_n=200.0)
+            Thruster(position=SAIL_CENTRE_OF_EFFORT, direction=(1.0, 0.0, 0.0), max_force_n=200.0)
         ],
         free_dofs=(True, False, True, False, True, False),
         initial_eta=(0.0, 0.0, -(HULL_BOTTOM_Z + ride_height_m), 0.0, 0.0, 0.0),
@@ -202,7 +219,7 @@ def moth_mesh(hull_size: Vec3, main_foil: Foil, rudder_foil: Foil, struts: list[
             (RUDDER_X, 0.0, rudder_head[2] + rudder_strut_length / 2),
             vertical,
         ),
-        pod((0.2, 0.0, FOIL_Z), (-0.32, 0.0, FOIL_Z), 0.022),
+        pod((MAIN_FOIL_X + 0.2, 0.0, FOIL_Z), (MAIN_FOIL_X - 0.32, 0.0, FOIL_Z), 0.022),
         pod((RUDDER_X + 0.1, 0.0, FOIL_Z), (RUDDER_X - 0.12, 0.0, FOIL_Z), 0.016),
     ]
     return merge(

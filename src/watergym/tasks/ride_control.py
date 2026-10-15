@@ -1,8 +1,13 @@
-"""RideControl-Moth-v0: hold a foiling Moth at a set ride height across sea states.
+"""RideControl-Moth-v1: hold a foiling Moth at a set ride height across sea states.
 
 The policy moves the main-foil flap; the sail is held at the wand example's 0.65 so speed is
-not a control. Everything below is frozen for v0. Changing any constant, the reward, the
-observations or the terminations makes a new task version.
+not a control. Everything below is frozen for v1, and so is the Moth it flies. Changing any
+constant, the reward, the observations, the terminations or the vessel makes a new task
+version.
+
+v1 replaced v0 (removed): the heave acceleration comes from the dynamics instead of a
+backward difference, W_COMFORT halved, and the Moth's sail and main foil act at their real
+positions, which moved its pitch trim.
 
 The env's reward_fn hook runs after the physics step and before finished envs reset, so it
 is where this task reads the state: reward, observations, termination causes and metric
@@ -16,11 +21,12 @@ from torch import Tensor
 
 from watergym.env import SeaState, WaterEnv
 from watergym.rigid_body import Pose
+from watergym.vessel import vessel_derivative
 from watergym.vessels import moth
 from watergym.vessels.moth_vessel import FLAP_RANGE, HULL_BOTTOM_Z, WAND_PIVOT, wand_flap
 from watergym.waves import elevation
 
-TASK_ID = "RideControl-Moth-v0"
+TASK_ID = "RideControl-Moth-v1"
 
 DT = 0.02
 EPISODE_LENGTH_S = 20.0
@@ -36,7 +42,9 @@ W_HEIGHT, HEIGHT_SCALE_M = 1.0, 0.1
 W_PITCH, PITCH_SCALE = 0.5, math.radians(2)
 W_EFFORT = 0.05
 W_SMOOTHNESS = 0.5
-W_COMFORT = 0.01
+# 0.005 keeps comfort near 5 % of the tracking reward for the wand at Hs 0.6 m and 12 % under
+# PPO's initial action noise; 0.01 made it as large as the smoothness term during exploration.
+W_COMFORT = 0.005
 W_CRASH = 20.0
 
 POLICY_OBSERVATIONS = (
@@ -105,7 +113,7 @@ def zero_policy(obs: Tensor) -> Tensor:
 
 
 class RideControlMoth:
-    """A batch of Moths with the RideControl-Moth-v0 reward, observations and terminations.
+    """A batch of Moths with the RideControl-Moth-v1 reward, observations and terminations.
 
     step(flap [envs, 1]) -> (obs, reward, terminated, truncated, info). info holds
     "privileged_obs" for a critic, "final_obs" for envs that just finished, and per-step
@@ -176,9 +184,8 @@ class RideControlMoth:
     def _after_physics(self, env: WaterEnv) -> Tensor:
         """The env's reward_fn: runs on the post-step state before any env resets."""
         flap = env.action[:, 1]
-        heave_rate = self._heave_rate()
-        self.heave_accel = (heave_rate - self.heave_rate) / DT
-        self.heave_rate = heave_rate
+        self.heave_rate = self._heave_rate()
+        self.heave_accel = self._heave_accel()
 
         heights = self._heights_above_surface()
         ride_height = self._ride_height()
@@ -203,7 +210,7 @@ class RideControlMoth:
             "flap_deg": torch.rad2deg(flap * FLAP_RANGE),
             "heave_accel_m_s2": self.heave_accel.clone(),  # _restart zeroes it in place
             "touchdown": touchdown,
-            "ventilation_crash": ventilation_crash,
+            "ventilation_crash": ventilation_crash.clone(),  # a view of env.ventilated
             "too_tilted": too_tilted,
             "crashed": crashed,
             "ventilation_onsets": onsets,
@@ -220,6 +227,17 @@ class RideControlMoth:
         """World vertical velocity of the CG, up positive."""
         rotation = Pose.from_eta(self.env.eta).rotation
         return -(rotation[:, 2] * self.env.nu[:, :3]).sum(-1)
+
+    def _heave_accel(self) -> Tensor:
+        """World vertical acceleration of the CG, up positive, gravity removed, at the end of
+        the step: the dynamics' nu_dot under the action just applied, rotated to the world.
+        d(R v)/dt = R (nu_dot + omega x v)."""
+        env = self.env
+        derivative = vessel_derivative(env.vessel, env.sea, env.action, env.ventilated)
+        _, nu_dot = derivative(env.t, env.eta, env.nu)
+        rotation = Pose.from_eta(env.eta).rotation
+        linear = nu_dot[:, :3] + torch.linalg.cross(env.nu[:, 3:], env.nu[:, :3])
+        return -(rotation[:, 2] * linear).sum(-1)
 
     def _ride_height(self) -> Tensor:
         world = Pose.from_eta(self.env.eta).to_world(self.points[UNDER_CG : UNDER_CG + 1])

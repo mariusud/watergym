@@ -1,12 +1,12 @@
 """Train the Moth to hold its ride height with rsl_rl's PPO, or watch a saved checkpoint.
 
 uv run --extra rl examples/train_rsl_rl.py --num-envs 1024 --iterations 300
-uv run --extra rl examples/train_rsl_rl.py --task RideControl-Moth-v0 --hs 0.3
+uv run --extra rl examples/train_rsl_rl.py --task RideControl-Moth-v1 --hs 0.3
 uv run --extra rl --extra viz examples/train_rsl_rl.py --play logs/rsl_rl/moth/<run>/model_299.pt
 uv run --extra rl --extra viz examples/train_rsl_rl.py --play <ckpt> --viewer null
 
 Without --task the reward is the toy one below and the policy sees the full state. With
---task RideControl-Moth-v0 the policy sees the task's sensor observations, the critic its
+--task RideControl-Moth-v1 the policy sees the task's sensor observations, the critic its
 privileged ones, and the task's own reward, terminations and 20 s timeout apply.
 """
 

@@ -7,7 +7,9 @@ the vertical weighting Wk of Annex A. The weighting is a cascade of four analog 
     a-v transition  Ht = (1 + s/w3) / (1 + s/(Q4 w4) + (s/w4)^2)
     upward step  Hs = (1 + s/(Q5 w5) + (s/w5)^2) / (1 + s/(Q6 w6) + (s/w6)^2) (w5/w6)^2
 
-each turned into a digital biquad by the bilinear transform and run in series.
+`wk_filter` applies the analog gain to the signal's spectrum, so the weighting is exact up to
+Nyquist. A bilinear-transformed biquad cascade without prewarping reads 14-60 % low from 12.5
+to 20 Hz at 50 Hz sampling, which flattered policies that chatter the flap.
 """
 
 import math
@@ -47,6 +49,7 @@ def wk_analog_sections() -> list[tuple[Polynomial, Polynomial]]:
 
 
 def analog_gain(sections: list[tuple[Polynomial, Polynomial]], frequency_hz: float) -> float:
+    """|H(j 2 pi f)| of the cascade."""
     s = 2j * math.pi * frequency_hz
     gain = 1.0 + 0j
     for num, den in sections:
@@ -54,34 +57,21 @@ def analog_gain(sections: list[tuple[Polynomial, Polynomial]], frequency_hz: flo
     return abs(gain)
 
 
-def bilinear(num: Polynomial, den: Polynomial, sample_rate: float) -> tuple[np.ndarray, ...]:
-    """Second-order analog section to digital (b, a), with s = 2 fs (1 - z^-1) / (1 + z^-1)."""
-    k = 2 * sample_rate
-    minus, plus = np.array([1.0, -1.0]), np.array([1.0, 1.0])
-    powers = [np.polymul(np.polymul([1.0], plus), plus)]
-    powers.append(np.polymul(minus, plus) * k)
-    powers.append(np.polymul(minus, minus) * k**2)
-
-    def digital(coefficients: Polynomial) -> np.ndarray:
-        padded = list(coefficients) + [0.0] * (3 - len(coefficients))
-        return sum(c * p for c, p in zip(padded, powers, strict=True))
-
-    b, a = digital(num), digital(den)
-    return b / a[0], a / a[0]
-
-
 def wk_filter(acceleration: Tensor, sample_rate: float) -> Tensor:
-    """Wk-weighted acceleration, filtering along dim 0 of [steps, envs]."""
-    x = acceleration.double()
-    for num, den in wk_analog_sections():
-        b, a = bilinear(num, den, sample_rate)
-        y = torch.zeros_like(x)
-        x1 = x2 = y1 = y2 = torch.zeros_like(x[0])
-        for n in range(len(x)):
-            y[n] = b[0] * x[n] + b[1] * x1 + b[2] * x2 - a[1] * y1 - a[2] * y2
-            x1, x2, y1, y2 = x[n], x1, y[n], y1
-        x = y
-    return x.to(acceleration.dtype)
+    """Wk-weighted acceleration along dim 0 of [steps, envs].
+
+    The signal is zero-padded to twice its length before the FFT, so the record is filtered
+    as if the boat were at rest before and after it, the way a causal filter started from rest
+    would see it, without wrapping the end of the record onto its start.
+    """
+    x = acceleration.detach().double().cpu().numpy()
+    steps = x.shape[0]
+    frequency = np.fft.rfftfreq(2 * steps, 1 / sample_rate)
+    sections = wk_analog_sections()
+    gain = np.array([analog_gain(sections, f) if f > 0 else 0.0 for f in frequency])
+    spectrum = np.fft.rfft(x, n=2 * steps, axis=0) * gain.reshape(-1, *([1] * (x.ndim - 1)))
+    weighted = np.fft.irfft(spectrum, n=2 * steps, axis=0)[:steps]
+    return torch.from_numpy(weighted).to(acceleration.dtype).to(acceleration.device)
 
 
 def rms(x: Tensor) -> float:
