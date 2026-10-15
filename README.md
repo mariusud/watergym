@@ -9,7 +9,7 @@ A batched PyTorch gym for vessels in waves: hydrofoils, boats, USVs (uncrewed su
 You need no marine background. The terms in the code are defined below, and [docs/concepts](docs/concepts/README.md) explains the rest.
 
 <p align="center">
-  <img src="docs/images/readme/hero.gif" alt="A grid of International Moths foiling through head seas, each in its own random sea" width="100%">
+  <img src="docs/images/readme/hero.gif" alt="64 Moths foiling through one irregular sea" width="100%">
 </p>
 
 ## Quickstart
@@ -107,7 +107,7 @@ All four import from `watergym.vessels`, one file each in `src/watergym/vessels/
 
 Sea state sets the difficulty, as terrain does in legged RL. Every task runs over a grid of Hs, Tp and heading, and a score is a set of curves against sea state.
 
-The first task is `RideControl-Moth-v0`. A policy moves the main-foil flap to hold the hull 0.6 m above the mean water level. It sees only what a real foiler can measure: bow height, pitch, pitch rate, heave acceleration, speed and its last command. The quick sweep runs in about 30 s on a laptop CPU. It prints one line of metrics per sea state and policy, and writes [benchmarks/results/ride_control.csv](benchmarks/results/ride_control.csv) and a plot, `docs/images/benchmark_ride_control.png`:
+The first task is `RideControl-Moth-v1`. A policy moves the main-foil flap to hold the hull 0.6 m above the mean water level. It sees only what a real foiler can measure: bow height, pitch, pitch rate, heave acceleration, speed and its last command. The quick sweep runs in about 30 s on a laptop CPU. It prints one line of metrics per sea state and policy, and writes [benchmarks/results/ride_control.csv](benchmarks/results/ride_control.csv) and a plot, `docs/images/benchmark_ride_control.png`:
 
 ```bash
 OMP_NUM_THREADS=2 uv run --with matplotlib python benchmarks/ride_control_sweep.py --quick
@@ -117,10 +117,10 @@ Baselines from that sweep, head seas, Tp 3 s:
 
 | Hs [m] | wand tracking RMS [m] | wand a_w [m/s²] | zero-flap tracking RMS [m] | zero-flap crashes / min |
 |---|---|---|---|---|
-| 0.0 | 0.069 | 0.04 | 0.27 | 18 |
-| 0.2 | 0.073 | 0.52 | 0.26 | 15 |
-| 0.4 | 0.084 | 1.07 | 0.25 | 12 |
-| 0.6 | 0.103 | 1.70 | 0.21 | 12 |
+| 0.0 | 0.070 | 0.07 | 0.29 | 12 |
+| 0.2 | 0.074 | 0.53 | 0.27 | 12 |
+| 0.4 | 0.087 | 1.09 | 0.23 | 10.5 |
+| 0.6 | 0.107 | 1.70 | 0.20 | 12 |
 
 The wand never crashes on this grid, but it follows the waves, so the ISO 2631 comfort figure a_w climbs past 1 m/s² by Hs 0.4 m. Pass your own policy as `--policy wand mypkg.policies:actor`. The task is frozen: any change to its reward, observations or seeds makes a new id. Observations, reward, metrics and the full grid are in [docs/benchmark.md](docs/benchmark.md).
 
@@ -133,7 +133,7 @@ uv run --extra rl examples/train_rsl_rl.py --num-envs 1024 --iterations 300
 uv run --extra rl --extra viz examples/train_rsl_rl.py --play logs/rsl_rl/moth/<timestamp>/model_299.pt
 ```
 
-The example trains the Moth to hold its starting ride height and writes checkpoints and TensorBoard logs to `logs/rsl_rl/moth/<timestamp>/`. To train on the benchmark task instead, add `--task RideControl-Moth-v0` (and `--hs`, `--tp` for the sea): the policy sees the task's six sensor observations, the critic its privileged ones, and runs go to `logs/rsl_rl/RideControl-Moth-v0/<timestamp>/`. Score a task checkpoint against the wand with `benchmarks/ride_control_sweep.py --policy wand <checkpoint>.pt`, and pass the same `--task` to `--play`. `model_299.pt` exists only after the 300 iterations finish; the script also saves a checkpoint every 50 iterations, so `model_50.pt` appears earlier. Add `--device mps` or `--device cuda` to run more envs.
+The example trains the Moth to hold its starting ride height and writes checkpoints and TensorBoard logs to `logs/rsl_rl/moth/<timestamp>/`. To train on the benchmark task instead, add `--task RideControl-Moth-v1` (and `--hs`, `--tp` for the sea): the policy sees the task's six sensor observations, the critic its privileged ones, and runs go to `logs/rsl_rl/RideControl-Moth-v1/<timestamp>/`. Score a task checkpoint against the wand with `benchmarks/ride_control_sweep.py --policy wand <checkpoint>.pt`, and pass the same `--task` to `--play`. `model_299.pt` exists only after the 300 iterations finish; the script also saves a checkpoint every 50 iterations, so `model_50.pt` appears earlier. Add `--device mps` or `--device cuda` to run more envs.
 
 To check a checkpoint without a window, add `--viewer null`: it runs `--seconds 20` (the default) of sim time and prints the mean episode reward, the ride-height RMS in metres and the number of crashes. `RslRlVecEnv(env)` wraps any `WaterEnv` or task; [docs/training.md](docs/training.md) shows how `terminated` and `truncated` map to rsl_rl's `dones` and `time_outs`.
 
@@ -172,9 +172,10 @@ src/watergym/
   hydrostatics.py   buoyancy plus Froude-Krylov force from samples against the instantaneous surface
   foils.py          strip-theory lift and drag, free-surface lift loss, ventilation with hysteresis
   vessel.py         Vessel and Thruster, and the sum of forces that drives the equations of motion
+  wind.py           mean wind with Frøya gusts, and Fossen's wind load on the hull above the water
   vessels/          box_barge, moth, otter, bluerov2
   env.py            WaterEnv: batched reset/step in the Gymnasium vector style
-  tasks/            versioned benchmark tasks and metrics, starting with RideControl-Moth-v0
+  tasks/            versioned benchmark tasks and metrics, starting with RideControl-Moth-v1
   viewer.py         draws seas, vessels and force arrows with Newton's viewer
   rl/               rsl_rl adapter (extra: rl)
 examples/           numbered scripts, each runs on its own
@@ -186,7 +187,7 @@ tests/              physics checks, one file per module
 
 ## Physics in one paragraph
 
-Fossen's equation (M_RB + M_A) nu_dot + C(nu) nu + D(nu) nu = tau, integrated with RK4, with eta and nu in NED as in Fossen's handbook. The sea is a sum of Airy components drawn from a JONSWAP spectrum. Each submerged volume sample feels rho V (a_water - g), which gives buoyancy, restoring moments and Froude-Krylov wave forces in one term. Foils are cut into spanwise strips that see the water velocity relative to the strip, waves included.
+Fossen's equation (M_RB + M_A) nu_dot + C(nu) nu + D(nu) nu = tau, integrated with RK4, with eta and nu in NED as in Fossen's handbook. The sea is a sum of Airy components drawn from a JONSWAP spectrum. Each submerged volume sample feels rho V (a_water - g), which gives buoyancy, restoring moments and Froude-Krylov wave forces in one term. Foils are cut into spanwise strips that see the water velocity relative to the strip, waves included. An optional ocean current per env, uniform or varying with depth, enters the hull damping and added mass through Fossen's relative velocity nu - nu_c and the foils through their flow ([current](docs/concepts/08-current.md)).
 
 ## What the tests check
 
@@ -209,7 +210,7 @@ Reference values come from DNV-RP-C205 (JONSWAP), linear wave theory as in Falti
 - The Moth flies in the vertical plane only (surge, heave, pitch): the sailor's roll balance is not modelled, the sail is a constant forward force at the CG, and the wand reads the water height under its pivot.
 - Foils use thin-airfoil lift with a stall clamp and a flap-effectiveness factor, not a measured polar. Ventilation thresholds are placeholders; the hysteresis is modelled.
 - The BlueROV2 has four horizontal and four vertical thrusters in a simplified layout.
-- No actuator lag, sensor noise or wind yet, so no policy trained here has been tested on a real vessel.
+- No actuator lag or sensor noise yet, so no policy trained here has been tested on a real vessel.
 - Ventilation washes out once every wet strip has stayed below the washout angle (4 degrees by default) for 0.5 s; a horizontal foil must also be more than 1 chord deep. A surface-piercing strut washes out on angle alone and has no free-surface lift factor, so it loses lift near the surface only through its dry strips. Any change to these rules comes with a test that pins the new behaviour.
 
 ## Roadmap

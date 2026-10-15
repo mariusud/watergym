@@ -16,7 +16,10 @@ from watergym.foils import FoilLoads, update_ventilation
 from watergym.rigid_body import Pose, kinematics, rk4_step
 from watergym.vessel import Vessel, all_foil_loads, vessel_derivative, water_around
 from watergym.waves import Sea, make_sea
+from watergym.wind import Wind, WindState, make_wind, windage_from_mesh
 
+# Seeds the wind generator apart from the sea's, so adding wind leaves the seas unchanged.
+WIND_SEED_OFFSET = 1_000_003
 RewardFn = Callable[["WaterEnv"], Tensor]  # also the type of termination_fn: a bool [envs]
 
 
@@ -42,6 +45,7 @@ def advance(
     dt: float,
     substeps: int,
     frozen_waves: bool,
+    wind: Wind | None = None,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     """The physics of one env step: `substeps` RK4 steps, then the ventilation update.
 
@@ -54,7 +58,7 @@ def advance(
     if frozen_waves:
         midpoint = eta + dt / 2 * kinematics(eta, nu, Pose.from_eta(eta))
         waters = water_around(vessel, sea, t + dt / 2, Pose.from_eta(midpoint))
-    derivative = vessel_derivative(vessel, sea, action, ventilated, waters)
+    derivative = vessel_derivative(vessel, sea, action, ventilated, waters, wind)
     substep_dt = dt / substeps
     for _ in range(substeps):
         eta, nu = rk4_step(derivative, t, eta, nu, substep_dt)
@@ -92,6 +96,7 @@ class WaterEnv:
         device: str | torch.device = "cpu",
         frozen_waves: bool = False,
         compile: bool = False,
+        wind_state: WindState | None = None,
     ) -> None:
         """`frozen_waves` and `compile` are off by default. Measured on an M-series Mac with a
         Moth in 48-component seas:
@@ -105,6 +110,10 @@ class WaterEnv:
             envs, but slower on CPU from about 32 envs (inductor's ARM cos and sin are
             scalar). The first step takes about 30 s to compile. With torch 2.14 on MPS it
             fails together with frozen_waves: a fused Metal kernel needs too many buffers.
+
+        wind_state: wind per env, drawn from its own generator so the seas stay the same.
+            Zero speed, the default, adds no term: results match a run without wind bit
+            for bit.
         """
         self.vessel = vessel.to(device)
         self.num_envs = num_envs
@@ -133,6 +142,13 @@ class WaterEnv:
         )
         self.wetting_time = torch.zeros(num_envs, len(vessel.foils), device=self.device)
         self.sea = self._sample_sea(num_envs)
+        self.wind_state = wind_state or WindState()
+        self.wind: Wind | None = None
+        if self.wind_state.speed != 0:
+            if self.vessel.windage is None:
+                self.vessel.windage = windage_from_mesh(self.vessel.mesh, vessel.initial_eta)
+            self.wind_generator = torch.Generator().manual_seed(WIND_SEED_OFFSET)
+            self.wind = self._sample_wind(num_envs)
 
     @property
     def observation_size(self) -> int:
@@ -144,6 +160,8 @@ class WaterEnv:
     def reset(self, seed: int | None = None) -> tuple[Tensor, dict]:
         if seed is not None:
             self.generator.manual_seed(seed)
+            if self.wind is not None:
+                self.wind_generator.manual_seed(WIND_SEED_OFFSET + seed)
         self._reset_envs(torch.arange(self.num_envs, device=self.device))
         return self.observe(), {}
 
@@ -168,6 +186,7 @@ class WaterEnv:
             self.dt,
             self.substeps,
             self.frozen_waves,
+            self.wind,
         )
 
         self.steps += 1
@@ -205,6 +224,18 @@ class WaterEnv:
             device=self.device,
         )
 
+    def _sample_wind(self, num: int) -> Wind:
+        s = self.wind_state
+        return make_wind(
+            num,
+            s.speed,
+            s.direction_rad,
+            gusts=s.gusts,
+            num_components=s.num_components,
+            generator=self.wind_generator,
+            device=self.device,
+        )
+
     def _reset_envs(self, env_ids: Tensor) -> None:
         self.eta[env_ids] = torch.tensor(self.vessel.initial_eta, device=self.device)
         self.nu[env_ids] = torch.tensor(self.vessel.initial_nu, device=self.device)
@@ -213,3 +244,5 @@ class WaterEnv:
         self.ventilated[env_ids] = False
         self.wetting_time[env_ids] = 0.0
         self.sea.replace(env_ids, self._sample_sea(len(env_ids)))
+        if self.wind is not None:
+            self.wind.replace(env_ids, self._sample_wind(len(env_ids)))

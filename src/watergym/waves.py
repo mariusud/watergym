@@ -5,27 +5,32 @@ so the instantaneous surface sits at z = -zeta and a point is wet when z + zeta 
 """
 
 import math
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from typing import NamedTuple
 
 import torch
 from torch import Tensor
 
+from watergym.current import Current
+
 GRAVITY = 9.81
 # Largest [envs, points, components] tensor water_at builds: 64 MB in float32. Splitting
 # further costs speed on CPU and MPS; above it the peak memory grows with no speed gain.
 MAX_CHUNK_ELEMENTS = 2**24
+WAVE_FIELDS = ("amplitude", "omega", "wavenumber", "direction", "phase")
 
 
 @dataclass
 class Sea:
-    """Wave components per environment, each tensor shaped [num_envs, num_components]."""
+    """Wave components per environment, each tensor shaped [num_envs, num_components], and
+    an optional current that hulls and foils move through."""
 
     amplitude: Tensor
     omega: Tensor
     wavenumber: Tensor
     direction: Tensor
     phase: Tensor
+    current: Current | None = None
 
     @property
     def num_envs(self) -> int:
@@ -33,11 +38,17 @@ class Sea:
 
     def subset(self, index: slice | list[int] | Tensor) -> "Sea":
         """The seas of the selected envs only: a slice, a list of env ids or a tensor of ids."""
-        return Sea(**{f.name: getattr(self, f.name)[index] for f in fields(self)})
+        waves = {name: getattr(self, name)[index] for name in WAVE_FIELDS}
+        current = None if self.current is None else self.current.subset(index)
+        return Sea(**waves, current=current)
 
     def replace(self, env_ids: Tensor, other: "Sea") -> None:
-        for name in ("amplitude", "omega", "wavenumber", "direction", "phase"):
+        """Copy `other`'s waves into `env_ids`. Its current too, if it has one; otherwise the
+        envs keep theirs."""
+        for name in WAVE_FIELDS:
             getattr(self, name)[env_ids] = getattr(other, name)
+        if self.current is not None and other.current is not None:
+            self.current.replace(env_ids, other.current)
 
 
 def jonswap(omega: Tensor, hs: Tensor, tp: Tensor, gamma: float = 3.3) -> Tensor:

@@ -147,9 +147,32 @@ def damping_force(body: RigidBody, nu: Tensor) -> Tensor:
     return body.linear_damping * nu + body.quadratic_damping * nu.abs() * nu
 
 
-def acceleration(body: RigidBody, nu: Tensor, tau: Tensor) -> Tensor:
-    """nu_dot = M^-1 (tau - C(nu) nu - D(nu) nu)."""
-    net = tau - coriolis_force(body.mass_matrix, nu) - damping_force(body, nu)
+def acceleration(
+    body: RigidBody,
+    nu: Tensor,
+    tau: Tensor,
+    current: tuple[Tensor, Tensor] | None = None,
+) -> Tensor:
+    """nu_dot = M^-1 (tau - C(nu) nu - D(nu) nu).
+
+    With `current` = (nu_c, nu_c_dot), the current velocity [envs, 6] in the body frame and
+    its time derivative, the hydrodynamic terms see nu_r = nu - nu_c (Fossen, Handbook,
+    2021, sec. 10.3):
+
+        M_RB nu_dot + C_RB(nu) nu + M_A nu_r_dot + C_A(nu_r) nu_r + D(nu_r) nu_r = tau
+        nu_dot = M^-1 (tau - C_RB(nu) nu - C_A(nu_r) nu_r - D(nu_r) nu_r + M_A nu_c_dot)
+
+    C is linear in the mass matrix, so C_RB(nu) nu + C_A(nu_r) nu_r is written as
+    C(nu) nu + (C_A(nu_r) nu_r - C_A(nu) nu), which is exactly C(nu) nu when nu_c is zero.
+    """
+    if current is None:
+        net = tau - coriolis_force(body.mass_matrix, nu) - damping_force(body, nu)
+        return net @ body.inverse_mass_matrix.T
+    nu_c, nu_c_dot = current
+    nu_r = nu - nu_c
+    added_coriolis = coriolis_force(body.added_mass, nu_r) - coriolis_force(body.added_mass, nu)
+    coriolis = coriolis_force(body.mass_matrix, nu) + added_coriolis
+    net = tau - coriolis - damping_force(body, nu_r) + nu_c_dot @ body.added_mass.T
     return net @ body.inverse_mass_matrix.T
 
 

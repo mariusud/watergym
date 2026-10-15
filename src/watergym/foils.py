@@ -1,7 +1,7 @@
 """Strip-theory lift and drag on foils, struts and rudders.
 
 Each foil is cut into spanwise strips. A strip sees the water velocity relative to itself,
-body motion and wave orbital velocity included, and produces
+body motion, wave orbital velocity and current included, and produces
 
     L = 1/2 rho |U|^2 A C_L(alpha),   D = 1/2 rho |U|^2 A C_D(alpha)
 
@@ -18,6 +18,7 @@ from dataclasses import dataclass, field, replace
 import torch
 from torch import Tensor
 
+from watergym.current import current_velocity
 from watergym.geometry import Vec3
 from watergym.hydrostatics import WATER_DENSITY, submerged_fraction
 from watergym.rigid_body import Pose
@@ -154,7 +155,10 @@ def foil_loads(
     points = pose.to_world(r)
     water = water or water_at(sea, points, t)
     strip_velocity = nu[:, None, :3] + torch.linalg.cross(nu[:, None, 3:], r[None])
-    flow = pose.to_body(water.velocity) - strip_velocity
+    water_velocity = water.velocity
+    if sea.current is not None:
+        water_velocity = water_velocity + current_velocity(sea.current, points)
+    flow = pose.to_body(water_velocity) - strip_velocity
     flow = flow - (flow @ span)[..., None] * span
     speed = flow.norm(dim=-1).clamp(min=1e-6)
 

@@ -1,6 +1,6 @@
 """A vessel is a rigid body plus the things that push on it: hull volume, foils, thrusters.
 
-    tau = gravity + hydrostatics + foils + thrusters
+    tau = gravity + hydrostatics + foils + thrusters + wind
     nu_dot = (M_RB + M_A)^-1 (tau - C(nu) nu - D(nu) nu)
 
 The action vector is [thruster commands..., flap commands...], each in [-1, 1].
@@ -11,11 +11,13 @@ from dataclasses import dataclass, field, replace
 import torch
 from torch import Tensor
 
+from watergym.current import body_current
 from watergym.foils import Foil, FoilLoads, foil_loads, foil_wrench
 from watergym.geometry import Mesh, Vec3, VolumeSamples
 from watergym.hydrostatics import WATER_DENSITY, hydrostatic_force
 from watergym.rigid_body import Derivative, Pose, RigidBody, acceleration, kinematics
 from watergym.waves import GRAVITY, Sea, Water, water_at
+from watergym.wind import Wind, Windage, wind_force, windage_from_mesh
 
 Vec6 = tuple[float, float, float, float, float, float]
 
@@ -54,6 +56,8 @@ class Vessel:
     initial_eta: Vec6 = (0.0,) * 6
     initial_nu: Vec6 = (0.0,) * 6
     density: float = WATER_DENSITY
+    # None: computed from the mesh above the waterline when wind first acts.
+    windage: Windage | None = None
     free_dof_mask: Tensor = field(init=False)
 
     def __post_init__(self) -> None:
@@ -151,6 +155,7 @@ def generalized_force(
     action: Tensor,
     ventilated: Tensor,
     waters: list[Water] | None = None,
+    wind: Wind | None = None,
 ) -> Tensor:
     """tau [envs, 6] in the body frame. `waters` (from `water_around`) skips the wave
     evaluation, for the frozen-wave approximation."""
@@ -162,6 +167,10 @@ def generalized_force(
     loads = all_foil_loads(vessel, sea, t, pose, nu, action, ventilated, waters)
     for foil, foil_load in zip(vessel.foils, loads, strict=True):
         tau = tau + foil_wrench(foil, foil_load)
+    if wind is not None:
+        if vessel.windage is None:
+            vessel.windage = windage_from_mesh(vessel.mesh, vessel.initial_eta)
+        tau = tau + wind_force(wind, vessel.windage, t, pose, nu)
     return tau
 
 
@@ -171,6 +180,7 @@ def vessel_derivative(
     action: Tensor,
     ventilated: Tensor,
     waters: list[Water] | None = None,
+    wind: Wind | None = None,
 ) -> Derivative:
     """The right-hand side (eta_dot, nu_dot) with action and ventilation held over a step.
 
@@ -180,8 +190,9 @@ def vessel_derivative(
 
     def derivative(t: Tensor, eta: Tensor, nu: Tensor) -> tuple[Tensor, Tensor]:
         pose = Pose.from_eta(eta)
-        tau = generalized_force(vessel, sea, t, pose, nu, action, ventilated, waters)
-        nu_dot = vessel.free_dof_mask * acceleration(vessel.body, nu, tau)
+        tau = generalized_force(vessel, sea, t, pose, nu, action, ventilated, waters, wind)
+        current = None if sea.current is None else body_current(sea.current, pose, nu)
+        nu_dot = vessel.free_dof_mask * acceleration(vessel.body, nu, tau, current)
         return kinematics(eta, nu, pose), nu_dot
 
     return derivative

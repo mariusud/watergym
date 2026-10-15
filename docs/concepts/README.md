@@ -8,4 +8,6 @@ Each page starts with an example you can check by hand, then explains the idea a
 4. [Buoyancy](04-buoyancy.md): sampling the hull against the instantaneous surface.
 5. [Foils](05-foils.md): strip theory, relative flow, free-surface decay, ventilation, the Moth wand.
 6. [Batching](06-batching.md): why every quantity is a `[num_envs, ...]` tensor.
+7. [Wind](07-wind.md): mean wind, height profile and Frøya gusts, and Fossen's wind load on the hull above the water.
+8. [Current](08-current.md): damping on the velocity relative to the water, and a current that varies with depth.
 
