@@ -16,7 +16,7 @@ Solve for `nu_dot`, integrate, repeat. Term by term:
 - **M_A, added mass**: accelerating the hull also accelerates nearby water, which acts like extra mass. It differs per direction and is a property of the hull shape.
 - **C(nu)**: Coriolis and centripetal terms. They appear because ν is in a rotating frame. A body spinning about one axis while moving along another feels a force from this.
 - **D(nu)**: damping. A linear part (skin friction, wave radiation) plus a quadratic part, `-d * |u| * u`. At 2 m/s with d = 30 N s²/m² the quadratic drag is `30 * 2 * 2` = 120 N.
-- **g(eta)**: gravity and buoyancy restoring force. See [buoyancy](04-buoyancy.md).
+- **g(eta)**: gravity and buoyancy restoring force. The code adds it to tau instead of keeping a separate term. See [buoyancy](04-buoyancy.md).
 - **tau**: everything we apply: propulsion, foil forces, wave excitation, wind.
 
 The equation form is from Fossen's [*Handbook of Marine Craft Hydrodynamics and Motion Control*](https://fossen.biz/html/marineCraftModel.html), 2nd ed. (2021).

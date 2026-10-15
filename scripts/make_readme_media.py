@@ -61,6 +61,7 @@ def make_scene(
     edge_fade: float = 0.25,
     floor_color: tuple[float, float, float] = FLOOR_COLOR,
     sea_opacity: float = 0.8,
+    scene_type: type[WaterViewer] = WaterViewer,
 ) -> tuple[WaterViewer, object]:
     """A headless viewer styled for the README: one ocean from the foreground to the horizon,
     patches that taper to flat at their borders so they join into a single sea."""
@@ -72,7 +73,7 @@ def make_scene(
     renderer.sky_lower, renderer.sky_upper = HORIZON, HAZE
     renderer.ambient_sky = (0.75, 0.82, 0.9)
     renderer.ambient_ground = (0.2, 0.3, 0.35)
-    scene = WaterViewer(
+    scene = scene_type(
         viewer,
         num_envs,
         patch_size_m=patch_m,
@@ -99,12 +100,19 @@ def make_scene(
     return scene, viewer
 
 
-def log_outer_sea(viewer, scene: WaterViewer, reach_m: float = 600.0) -> None:
-    """Flat water from the edge of the env grid out to the horizon. The patches taper to
-    flat at their borders, so the two join without a seam and no patch edge shows."""
+def log_outer_sea(
+    viewer,
+    scene: WaterViewer,
+    bounds: tuple[float, float, float, float] | None = None,
+    reach_m: float = 600.0,
+) -> None:
+    """Flat water from `bounds` (x0, y0, x1, y1; by default the env grid) out to the
+    horizon. What lies inside fades to flat at its border, so no edge shows."""
     half = scene.patch[:, 0].max().item()
     x0, y0 = (scene.offsets[:, :2].min(0).values - half).tolist()
     x1, y1 = (scene.offsets[:, :2].max(0).values + half).tolist()
+    if bounds is not None:
+        x0, y0, x1, y1 = bounds
     inner = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
     outer = [[x0 - reach_m, y0 - reach_m], [x1 + reach_m, y0 - reach_m]]
     outer += [[x1 + reach_m, y1 + reach_m], [x0 - reach_m, y1 + reach_m]]
@@ -160,15 +168,97 @@ def add_label(image: Image.Image, title: str, subtitle: str = "") -> None:
         )
 
 
-HERO_SIDE = 8  # an 8 x 8 grid of Moths, each in its own random sea
-HERO_PATCH_M = 8.0
-HERO_STAR = HERO_SIDE - 1  # the close-up Moth sits on the near corner, so the camera
-# pulls back over open water instead of through the fleet
-HERO_FPS = 20.0
-CLOSE_S, ZOOM_S, HOLD_S, FADE_S = 2.6, 3.6, 1.4, 0.6
-
-
+HERO_SIDE = 8  # an 8 x 8 fleet of Moths sailing through one shared sea
+HERO_SPACING_M = 9.0
+HERO_STANDOFF_M = 10.0
+HERO_FPS = 30.0
+ISOLATE_S, REVEAL_S, HOLD_S = 3.0, 4.4, 2.0
 HERO_SEA = SeaState(hs=0.6, tp=2.8, heading_rad=math.pi, spreading=10.0, num_components=48)
+# The ocean mesh, in metres around the hero: 0.2 m cells within 15 m of it, 0.5 m beyond,
+# fading to flat over the last 10 m before the flat far ocean.
+OCEAN_BOUNDS = (-35.0, -100.0, 100.0, 35.0)
+OCEAN_FINE_M, OCEAN_FINE_STEP, OCEAN_STEP, OCEAN_FADE_M = 15.0, 0.2, 0.5, 10.0
+
+
+def fleet_homes() -> torch.Tensor:
+    """Start positions [N, 3] in the viewer frame (z up), hero (env 0) at the origin and
+    the rest on a scattered grid beyond it toward +x and -y."""
+    cells = torch.arange(HERO_SIDE**2)
+    grid = torch.stack(
+        (cells % HERO_SIDE, -(cells // HERO_SIDE), torch.zeros_like(cells)), -1
+    ).float()
+    scatter = torch.rand(len(cells), 3, generator=torch.Generator().manual_seed(1)) - 0.5
+    scatter *= torch.tensor([3.0, 3.0, 0.0])
+    scatter[0] = 0.0
+    homes = grid * HERO_SPACING_M + scatter
+    # The hero stands off the fleet, so not even a neighbour's shadow reaches the close-up.
+    homes[1:] += torch.tensor([HERO_STANDOFF_M, -HERO_STANDOFF_M, 0.0])
+    return homes
+
+
+def graded_axis(lo: float, hi: float) -> torch.Tensor:
+    return torch.cat(
+        (
+            torch.arange(lo, -OCEAN_FINE_M, OCEAN_STEP),
+            torch.arange(-OCEAN_FINE_M, OCEAN_FINE_M, OCEAN_FINE_STEP),
+            torch.arange(OCEAN_FINE_M, hi + 1e-3, OCEAN_STEP),
+        )
+    )
+
+
+class OceanScene(WaterViewer):
+    """The fleet on one continuous ocean. Every Moth sails at its own world position in
+    the same sea, and the ocean is a single mesh of that sea around the hero, so there
+    are no per-env patches and no seams. The view follows the hero."""
+
+    def setup(self, homes: torch.Tensor) -> None:
+        self.homes = homes
+        self.offsets = torch.zeros(self.num_envs, 3)
+        x0, y0, x1, y1 = OCEAN_BOUNDS
+        xs, ys = graded_axis(x0, x1), graded_axis(y0, y1)
+        self.axes = (xs, ys)
+        gx, gy = torch.meshgrid(xs, ys, indexing="ij")
+        self.ocean = torch.stack((gx, gy, torch.zeros_like(gx)), -1).reshape(-1, 3)
+        inside = torch.stack((gx - x0, x1 - gx, gy - y0, y1 - gy)).amin(0).reshape(-1)
+        fade = (inside / OCEAN_FADE_M).clamp(0, 1)
+        self.ocean_weight = fade * fade * (3 - 2 * fade)
+        nx, ny = gx.shape
+        i, j = torch.meshgrid(torch.arange(nx - 1), torch.arange(ny - 1), indexing="ij")
+        corner = (i * ny + j).reshape(-1)
+        quads = torch.stack((corner, corner + ny, corner + ny + 1, corner + 1), -1)
+        triangles = torch.cat((quads[:, [0, 1, 2]], quads[:, [0, 2, 3]])).reshape(-1)
+        self.ocean_triangles = wp.array(triangles.numpy().astype(np.int32), dtype=wp.int32)
+        log_outer_sea(self.viewer, self, OCEAN_BOUNDS)
+
+    def draw(self, t, sea, vessel=None, eta=None, foil_loads=None, newton_per_m=1500.0):
+        hero = eta[0, :2].detach().cpu()
+        followed = torch.zeros(self.num_envs, 3)
+        followed[:, :2] = hero
+        self.viewer.begin_frame(float(t.reshape(-1)[0]))
+        self._draw_ocean(t, sea, hero)
+        self._draw_vessels(vessel, eta.detach().cpu(), followed)
+        self.viewer.end_frame()
+
+    def _draw_ocean(self, t, sea, hero: torch.Tensor) -> None:
+        world = self.ocean * torch.tensor([1.0, -1.0, 0.0])
+        world[:, :2] += hero
+        surface = elevation(sea.subset([0]), world[None].to(sea.amplitude.device), t[:1])[0]
+        vertices = self.ocean.clone()
+        vertices[:, 2] = surface.cpu() * self.ocean_weight
+        grid = vertices.reshape(len(self.axes[0]), len(self.axes[1]), 3)
+        along_x, along_y = torch.gradient(grid, spacing=self.axes, dim=(0, 1))
+        normals = torch.nn.functional.normalize(torch.linalg.cross(along_x, along_y), dim=-1)
+        self.viewer.log_mesh(
+            "ocean",
+            vec3_array(vertices),
+            self.ocean_triangles,
+            normals=vec3_array(normals.reshape(-1, 3)),
+            color=self.sea_color,
+            roughness=self.sea_roughness,
+            opacity=self.sea_opacity,
+            dynamic=True,
+            backface_culling=False,
+        )
 
 
 def foils_stay_wet(env: WaterEnv) -> bool:
@@ -180,15 +270,20 @@ def foils_stay_wet(env: WaterEnv) -> bool:
 
 
 def hero_states(seconds: float) -> tuple[WaterEnv, list[tuple[torch.Tensor, torch.Tensor]]]:
-    """(t, eta) for every frame of a run in which no Moth crashes or launches, trying
-    seeds until one does."""
+    """(t, eta) for every frame of a run in which every Moth starts at its home position
+    in one shared sea and none crashes, launches or resets, trying seeds until one works."""
+    homes = fleet_homes()
     for seed in range(20):
         env = WaterEnv(moth(), HERO_SIDE**2, HERO_SEA)
         env.reset(seed=seed)
+        env.sea = env.sea.subset([0] * env.num_envs)
+        env.eta[:, 0] += homes[:, 0]
+        env.eta[:, 1] -= homes[:, 1]
         advance(env, 4.0)
         states, steps_per_frame = [], round(1 / HERO_FPS / env.dt)
-        for _ in range(round(seconds * HERO_FPS)):
-            if not foils_stay_wet(env):
+        for frame in range(round(seconds * HERO_FPS)):
+            expected_t = 4.0 + frame * steps_per_frame * env.dt
+            if not foils_stay_wet(env) or ((env.t - expected_t).abs() > 1e-3).any():
                 break
             states.append((env.t.clone(), env.eta.clone()))
             advance(env, steps_per_frame * env.dt)
@@ -203,62 +298,69 @@ def advance(env: WaterEnv, seconds: float) -> None:
         env.step(wand_action(env.sea, env.t, env.eta))
 
 
-def smoothstep(x: float) -> float:
+def smootherstep(x: float) -> float:
+    """0 to 1 with zero speed and zero acceleration at both ends."""
     x = min(max(x, 0.0), 1.0)
-    return x * x * (3 - 2 * x)
+    return x**3 * (x * (6 * x - 15) + 10)
 
 
-def aim(viewer, target: torch.Tensor, distance: float, pitch: float, yaw: float) -> None:
-    """Camera `distance` m from `target` (viewer frame, z up), looking along yaw, pitch."""
-    p, y = math.radians(pitch), math.radians(yaw)
-    back = torch.tensor([math.cos(p) * math.cos(y), math.cos(p) * math.sin(y), math.sin(p)])
-    viewer.set_camera(wp.vec3(*(target - distance * back).tolist()), pitch, yaw)
+def look_at(viewer, eye: torch.Tensor, target: torch.Tensor) -> None:
+    d = target - eye
+    yaw = math.degrees(math.atan2(d[1], d[0]))
+    pitch = math.degrees(math.atan2(d[2], d[:2].norm()))
+    viewer.set_camera(wp.vec3(*eye.tolist()), pitch, yaw)
 
 
-def hero_camera(scene: WaterViewer, seconds: float) -> None:
-    """Low and ahead of one Moth, then an eased pull back and up to the whole fleet."""
-    star = scene.offsets[HERO_STAR] + torch.tensor([0.0, 0.0, 0.35])
-    fleet = scene.offsets.mean(0)
-    s = smoothstep((seconds - CLOSE_S) / ZOOM_S)
-    drift = min(seconds / CLOSE_S, 1.0)
-    target = star + s * (fleet - star)
-    distance = 5.5 * (85.0 / 5.5) ** s
-    pitch = -6 - 22 * smoothstep(2 * s)
-    aim(scene.viewer, target, distance, pitch, -160 + 10 * drift + 15 * s)
+def hero_camera(scene: OceanScene, seconds: float) -> None:
+    """One continuous drone move, in polar coordinates around the hero Moth.
+
+    Isolate: low (1.4 m) and 7 m out, ahead of the beam on the fleet side, looking back
+    past the boat at open sea while orbiting slowly at 4 deg/s.
+    Reveal: an S-curve (smootherstep, no linear segment) swings the camera about 180 deg
+    round the bow, out to 16 m and up to 24 m, while the aim slides from the hero to the
+    middle of the fleet, so the other Moths enter from the frame edge as the camera turns.
+    Hold: the same slow orbit carries on over the wide shot.
+    """
+    hero = scene.homes[0] + torch.tensor([0.0, 0.0, 1.7])
+    fleet = scene.homes.mean(0)
+    to_fleet = math.degrees(math.atan2(fleet[1] - hero[1], fleet[0] - hero[0]))
+    start, end = -45.0, to_fleet + 180.0
+    s = smootherstep((seconds - ISOLATE_S) / REVEAL_S)
+    angle = math.radians(start + 4.0 * seconds + s * (end - start - 4.0 * ISOLATE_S))
+    radius = 7.0 * (16.0 / 7.0) ** s
+    height = 1.4 * (24.0 / 1.4) ** s
+    target = hero + smootherstep((seconds - ISOLATE_S - 0.4) / REVEAL_S) * (fleet - hero)
+    eye = hero + torch.tensor([radius * math.cos(angle), radius * math.sin(angle), 0.0])
+    eye[2] = height
+    look_at(scene.viewer, eye, target)
 
 
-def hero_frames(width: int) -> tuple[list[Image.Image], list[Image.Image]]:
-    """GIF-size frames and full 1280 x 720 frames. The clip ends by dissolving from the
-    wide shot into its own opening frames, so it loops without a jump."""
-    loop_s = CLOSE_S + ZOOM_S + HOLD_S
-    env, states = hero_states(loop_s + FADE_S)
-    scene, viewer = make_scene(HERO_SIDE**2, HERO_PATCH_M, 1280, 720, sea_opacity=MOTH_SEA_OPACITY)
-    small, full = [], []
+def hero_frames() -> list[Image.Image]:
+    env, states = hero_states(ISOLATE_S + REVEAL_S + HOLD_S)
+    scene, viewer = make_scene(
+        HERO_SIDE**2, 1.0, 1280, 720, sea_opacity=MOTH_SEA_OPACITY, scene_type=OceanScene
+    )
+    scene.setup(fleet_homes())
+    frames = []
     for i, (t, eta) in enumerate(states):
         hero_camera(scene, i / HERO_FPS)
         scene.draw(t, env.sea, env.vessel, eta)
-        frame = snapshot(viewer, (1280, 720))
-        full.append(frame)
-        small.append(frame.resize((width, width * 9 // 16), Image.Resampling.LANCZOS))
-        if i == round(1.2 * HERO_FPS):
-            frame.save(OUT / "hero.png", optimize=True)
+        frames.append(snapshot(viewer, (1280, 720)))
+        if i == round(1.5 * HERO_FPS):
+            frames[-1].save(OUT / "hero.png", optimize=True)
         time.sleep(0.05)
     viewer.close()
-    loop, fade = round(loop_s * HERO_FPS), round(FADE_S * HERO_FPS)
-    for frames in (small, full):
-        dissolve = [
-            Image.blend(frames[loop + i], frames[i], (i + 1) / (fade + 1)) for i in range(fade)
-        ]
-        frames[:] = frames[fade:loop] + dissolve
-    return small, full
+    return frames
 
 
-def make_hero(width: int = 800) -> None:
-    small, full = hero_frames(width)
-    every = 2  # the GIF runs at half the video frame rate to stay small
-    save_gif(small[::every], OUT / "hero.gif", round(100 * every / HERO_FPS))
+def make_hero(width: int = 600) -> None:
+    """hero.mp4 at 30 fps and 1280 x 720, hero.gif at 15 fps and `width`. Both end on the
+    wide shot and cut straight back to the close-up."""
+    frames = hero_frames()
+    small = [f.resize((width, width * 9 // 16), Image.Resampling.LANCZOS) for f in frames[::2]]
+    save_gif(small, OUT / "hero.gif", round(200 / HERO_FPS))
     if shutil.which("ffmpeg"):
-        save_mp4(full, OUT / "hero.mp4", HERO_FPS)
+        save_mp4(frames, OUT / "hero.mp4", HERO_FPS)
 
 
 def save_mp4(frames: list[Image.Image], path: Path, fps: float) -> None:

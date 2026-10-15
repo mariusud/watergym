@@ -32,7 +32,7 @@ Spectrum formulas are in [DNV-RP-C205, *Environmental conditions and environment
 
 ## Orbital velocity
 
-Below the surface each component moves water in circles whose size decays as `exp(k*z)` (z negative below the surface). The horizontal and vertical velocity of the water at a point is the sum over components. Two consumers use it: hull excitation, and foils, which add it to their relative flow (see [foils](05-foils.md)).
+Below the surface each component moves water in circles whose size decays as `exp(-k*z)` (NED, so z is positive below the surface). The horizontal and vertical velocity of the water at a point is the sum over components. Two consumers use it: hull excitation, and foils, which add it to their relative flow (see [foils](05-foils.md)).
 
 ## Encounter frequency
 

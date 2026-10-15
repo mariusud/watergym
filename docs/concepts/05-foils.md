@@ -49,6 +49,8 @@ A policy trained on smooth dynamics has not seen a switch like this, which makes
 
 ## The Moth wand
 
-An International Moth, a foiling dinghy, holds ride height with a wand, a rod that trails on the water ahead of the bow. A low hull pushes the rod back, which through a linkage raises the flap angle, which raises lift. A high hull does the reverse. It is a mechanical proportional controller. In short, steep waves the wand skips, so it follows small waves it should ignore. In WaterGym the wand is the baseline controller: sample the surface at the wand tip, convert the angle to flap deflection, and compare a learned policy against it.
+An International Moth, a foiling dinghy, holds ride height with a wand, a rod that trails on the water ahead of the bow. A low hull moves the rod, and a linkage turns the flap trailing edge down, which adds lift. A high hull does the reverse. It is a mechanical proportional controller. In short, steep waves the wand skips, so it follows small waves it should ignore. In WaterGym the wand is the baseline controller: sample the surface at the wand tip, convert the angle to flap deflection, and compare a learned policy against it.
+
+The WaterGym Moth trims in pitch the way a real one does. The sail drives at its centre of effort, 2 m above the CG, so its 130 N of drive is a 260 N m bow-down moment, and the foil drag below the CG adds to it. The main foil sits 0.45 m ahead of the CG, and its lift balances both. In calm water the wand settles at 0.545 m ride height, 8.4 m/s and 0.26 degrees bow up, with the flap near zero. The main foil then lifts 1074 N and the rudder foil 54 N, about 5 % of the 1128 N weight. Each foil's heave added mass acts at the foil, so it couples heave and pitch (`foil_added_mass` in `moth_vessel.py`).
 
 Implemented in `src/watergym/foils.py`. Next: [batching](06-batching.md).
